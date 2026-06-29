@@ -184,7 +184,14 @@ def main(year=2025, race='Monza', num_iterations=200_000):
         session_fp3 = _try_load_session(year, race, 'FP1')
 
     if session_fp2 is None:
-        print("✗ FP2 data not available. Cannot compute race pace.")
+        print("   ℹ  FP2 not found — trying Sprint Race for long-run pace …")
+        session_fp2 = _try_load_session(year, race, 'S')
+    if session_fp2 is None:
+        print("   ℹ  Sprint Race not found — trying FP1 …")
+        session_fp2 = _try_load_session(year, race, 'FP1')
+
+    if session_fp2 is None:
+        print("✗ No race-pace representative session found (FP2/S/FP1).")
         print("  Hint: Data may not yet be uploaded for this weekend.")
         return
 
