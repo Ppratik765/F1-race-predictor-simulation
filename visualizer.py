@@ -301,12 +301,18 @@ def plot_joyplot(raw_data_file, prefix, year, race):
                 peak_x = x_data[max_idx]
                 peak_y = y_data[max_idx]
                 
-                ax.text(peak_x, peak_y, f" {driver} ", 
-                        color=get_color(driver), 
-                        fontsize=9, 
-                        fontweight='bold',
-                        ha='center', va='bottom',
-                        bbox=dict(facecolor='white', alpha=0.6, edgecolor='none', pad=0.5))
+                # Add an arrow pointing to the peak
+                y_offset = np.max(y_data) * 0.15  # Label 15% above the peak
+                
+                ax.annotate(f" {driver} ",
+                            xy=(peak_x, peak_y),
+                            xytext=(peak_x, peak_y + y_offset),
+                            color=get_color(driver),
+                            fontsize=9,
+                            fontweight='bold',
+                            ha='center', va='bottom',
+                            arrowprops=dict(arrowstyle="-|>", color=get_color(driver), linewidth=1.2, alpha=0.8),
+                            bbox=dict(facecolor='white', alpha=0.6, edgecolor='none', pad=0.5))
             except Exception:
                 pass
             
