@@ -15,6 +15,7 @@ sys.stdout.reconfigure(encoding='utf-8')
 import json
 import time
 import datetime
+import argparse
 import numpy as np
 import fastf1
 
@@ -199,10 +200,13 @@ def main(year=2025, race='Monza', num_iterations=200_000):
     if session_fp2 is None:
         print("✗ No race-pace representative session found (FP2/S/FP1).")
         print("  Hint: Data may not yet be uploaded for this weekend.")
+        print("  Try again closer to the race weekend (typically Friday afternoon onwards).")
         return
 
     if session_fp3 is None:
         print("✗ No qualifying-representative session found (FP3/SQ/FP1).")
+        print("  Hint: Data may not yet be uploaded for this weekend.")
+        print("  Try again closer to the race weekend (typically Saturday afternoon onwards).")
         return
 
     print("⏳ Extracting driver statistics …")
@@ -384,4 +388,10 @@ def main(year=2025, race='Monza', num_iterations=200_000):
 
 
 if __name__ == "__main__":
-    main(year=2026, race='Austria', num_iterations=50_000)
+    parser = argparse.ArgumentParser(description="F1 Monte Carlo Backtester")
+    parser.add_argument('--year', type=int, default=2026, help='Year of the race')
+    parser.add_argument('--race', type=str, default='Austria', help='Name of the race')
+    parser.add_argument('--iterations', type=int, default=50000, help='Number of Monte Carlo iterations')
+    args = parser.parse_args()
+    
+    main(year=args.year, race=args.race, num_iterations=args.iterations)
