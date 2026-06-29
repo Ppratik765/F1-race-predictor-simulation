@@ -10,6 +10,8 @@ adapts its behaviour accordingly:
   • All sessions exist → full backtest with real grid
 """
 
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
 import json
 import time
 import datetime
@@ -22,6 +24,9 @@ from data_pipeline import (
     extract_race_pace_and_deg,
     extract_real_grid,
     extract_reliability_stats,
+    extract_season_trends,
+    extract_team_mapping,
+    extract_weather_context,
 )
 from quali_engine import run_quali_sim
 from race_engine import run_race_sim
@@ -143,15 +148,15 @@ def _try_load_session(year, race, session_type):
     return None
 
 
-# ── Main ──────────────────────────────────────────────────────────────────
+# -- Main ------------------------------------------------------------------
 
 def main(year=2025, race='Monza', num_iterations=200_000):
     import pandas as pd  # local import for Timestamp usage
 
-    print(f"\n{'─' * 60}")
+    print(f"\n{'-' * 60}")
     print(f"  F1 Monte Carlo Simulation  ·  {year} {race}")
     print(f"  Iterations: {num_iterations:,}")
-    print(f"{'─' * 60}")
+    print(f"{'-' * 60}")
 
     t0 = time.time()
 
@@ -204,6 +209,9 @@ def main(year=2025, race='Monza', num_iterations=200_000):
     quali_stats = extract_quali_stats(session_fp3)
     race_stats  = extract_race_pace_and_deg(session_fp2)
     reliability_stats = extract_reliability_stats(year, race)
+    season_trends = extract_season_trends(year, race)
+    team_mapping = extract_team_mapping(session_fp2)
+    weather_context = extract_weather_context(session_fp2)
 
     if not quali_stats or not race_stats:
         print("✗ Could not extract stats. Check session data.")
@@ -211,6 +219,22 @@ def main(year=2025, race='Monza', num_iterations=200_000):
 
     t1 = time.time()
     print(f"✓ Data ready in {t1 - t0:.1f} s")
+    
+    # Print weather conditions
+    if weather_context:
+        rain_str = "WET" if weather_context.get('rainfall', False) else "DRY"
+        print(f"\n   Weather: Track {weather_context['track_temp']:.0f} C | Air {weather_context['air_temp']:.0f} C | {rain_str}")
+
+    if season_trends:
+        trend_rows = sorted(season_trends.items(), key=lambda x: x[1]['power_rank_delta'])
+        _print_table(
+            "SEASON POWER RANKINGS (Last 5 Races)",
+            ["Rank", "Driver", "Avg Race Pace Deficit", "Sunday Conversion Factor"],
+            [
+                [str(idx + 1), drv, f"+{stats['power_rank_delta']:.3f}s", f"{stats['sunday_conversion']:+.3f}s"]
+                for idx, (drv, stats) in enumerate(trend_rows)
+            ],
+        )
 
     # ── Step 2: Determine grid — real or simulated ────────────────────
     real_grid = None
@@ -279,6 +303,8 @@ def main(year=2025, race='Monza', num_iterations=200_000):
         num_laps=num_laps,
         num_pitstops=2,
         pitstop_time_loss=22.0,
+        season_trends=season_trends,
+        weather_context=weather_context,
     )
     t3 = time.time()
     print(f"✓ Race done in {t3 - t2:.1f} s")
@@ -286,7 +312,7 @@ def main(year=2025, race='Monza', num_iterations=200_000):
     # Print race table
     race_rows = sorted(
         finishing_probs.items(),
-        key=lambda x: x[1]['Win'],
+        key=lambda x: (x[1]['Win'], x[1]['Podium'], x[1]['Top10'], x[1]['Finish']),
         reverse=True,
     )
     _print_table(
@@ -335,6 +361,10 @@ def main(year=2025, race='Monza', num_iterations=200_000):
 
         output_data['results'][driver] = driver_data
 
+    # Include team mapping for dynamic visualizer colors
+    output_data['team_mapping'] = team_mapping
+    output_data['weather'] = weather_context
+
     output_file = f'results_{race.lower()}_{year}.json'
     with open(output_file, 'w') as f:
         json.dump(output_data, f, indent=4)
@@ -354,4 +384,4 @@ def main(year=2025, race='Monza', num_iterations=200_000):
 
 
 if __name__ == "__main__":
-    main(year=2026, race='Austria', num_iterations=200_000)
+    main(year=2026, race='Austria', num_iterations=50_000)

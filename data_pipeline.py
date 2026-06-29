@@ -31,6 +31,242 @@ def get_session(year, race, session_type):
     return session
 
 
+# ── Team Mapping Extractor ─────────────────────────────────────────────────
+def extract_team_mapping(session):
+    """
+    Extracts driver → {team_name, team_color} from a session's results.
+    Colors come directly from FastF1 so they are accurate for any year.
+    """
+    mapping = {}
+    if session is None or session.results is None or session.results.empty:
+        return mapping
+    for _, row in session.results.iterrows():
+        abbr = row.get('Abbreviation')
+        if not abbr or pd.isna(abbr):
+            continue
+        team = str(row.get('TeamName', 'Unknown'))
+        color = str(row.get('TeamColor', '888888')).strip('#')
+        mapping[abbr] = {
+            'team': team,
+            'color': f'#{color}',
+        }
+    return mapping
+
+
+# ── Weather Context Extractor ──────────────────────────────────────────────
+def extract_weather_context(session):
+    """
+    Extracts median track temperature, air temperature, and rainfall flag
+    from a session's weather data feed.
+    """
+    context = {'track_temp': 30.0, 'air_temp': 25.0, 'rainfall': False}
+    if session is None:
+        return context
+    try:
+        weather = session.weather_data
+        if weather is not None and len(weather) > 0:
+            context['track_temp'] = float(weather['TrackTemp'].median())
+            context['air_temp'] = float(weather['AirTemp'].median())
+            context['rainfall'] = bool(weather['Rainfall'].any())
+    except Exception:
+        pass
+    return context
+
+
+# ── Track Characteristics ──────────────────────────────────────────────────
+# Classification: HIGH_DF (slow, twisty), MEDIUM, LOW_DF (power circuits)
+TRACK_CHARACTERISTICS = {
+    # HIGH DOWNFORCE — slow corners, heavy aero dependency
+    'Monaco':        'HIGH_DF',
+    'Hungary':       'HIGH_DF',
+    'Singapore':     'HIGH_DF',
+    'Melbourne':     'HIGH_DF',
+    'Zandvoort':     'HIGH_DF',
+    # MEDIUM — balanced circuits
+    'Bahrain':       'MEDIUM',
+    'Spain':         'MEDIUM',
+    'Barcelona':     'MEDIUM',
+    'Austria':       'MEDIUM',
+    'Silverstone':   'MEDIUM',
+    'Great Britain': 'MEDIUM',
+    'Abu Dhabi':     'MEDIUM',
+    'Yas Marina':    'MEDIUM',
+    'Lusail':        'MEDIUM',
+    'Qatar':         'MEDIUM',
+    'Mexico':        'MEDIUM',
+    'São Paulo':     'MEDIUM',
+    'Brazil':        'MEDIUM',
+    'Imola':         'MEDIUM',
+    'Emilia Romagna':'MEDIUM',
+    'China':         'MEDIUM',
+    'Shanghai':      'MEDIUM',
+    'Japan':         'MEDIUM',
+    'Suzuka':        'MEDIUM',
+    'Miami':         'MEDIUM',
+    'Las Vegas':     'MEDIUM',
+    'Saudi Arabia':  'MEDIUM',
+    'Jeddah':        'MEDIUM',
+    # LOW DOWNFORCE — power tracks, long straights
+    'Monza':         'LOW_DF',
+    'Italy':         'LOW_DF',
+    'Spa':           'LOW_DF',
+    'Belgium':       'LOW_DF',
+    'Baku':          'LOW_DF',
+    'Azerbaijan':    'LOW_DF',
+    'Canada':        'LOW_DF',
+    'Canadian':      'LOW_DF',
+    'Montreal':      'LOW_DF',
+}
+
+def _get_track_type(event_name):
+    """Resolve an event name to a track type. Falls back to MEDIUM."""
+    name = str(event_name)
+    for key, ttype in TRACK_CHARACTERISTICS.items():
+        if key.lower() in name.lower():
+            return ttype
+    return 'MEDIUM'
+
+def _track_similarity_weight(type_a, type_b):
+    """
+    Returns a weight for how similar two track types are.
+    Same type = 1.5x, adjacent = 1.0x, opposite = 0.5x.
+    """
+    order = {'HIGH_DF': 0, 'MEDIUM': 1, 'LOW_DF': 2}
+    diff = abs(order.get(type_a, 1) - order.get(type_b, 1))
+    if diff == 0:
+        return 1.5
+    elif diff == 1:
+        return 1.0
+    else:
+        return 0.5
+
+
+# ── Season Trend Model ─────────────────────────────────────────────────────
+def extract_season_trends(year, current_race):
+    """
+    Extracts historical race vs qualifying performance from the preceding 3-5 races.
+    Computes a 'Sunday Conversion Factor' (how much a driver improves on Sunday)
+    and a 'Power Rank' (average clean race pace deficit to the fastest car).
+    
+    Historical races are weighted by track type similarity to the current race:
+      Same type = 1.5x, Adjacent = 1.0x, Opposite = 0.5x.
+    """
+    print("⏳ Extracting Season Trend Model (Historical 5-race momentum) …")
+    try:
+        current_event = fastf1.get_event(year, current_race)
+        current_round = current_event['RoundNumber']
+        current_track_type = _get_track_type(current_event['EventName'])
+    except Exception:
+        return {}
+
+    races_to_fetch = []
+    r = current_round - 1
+    y = year
+    
+    while len(races_to_fetch) < 5:
+        if r > 0:
+            races_to_fetch.append((y, r))
+            r -= 1
+        else:
+            y -= 1
+            try:
+                prev_schedule = fastf1.get_event_schedule(y)
+                max_round = prev_schedule['RoundNumber'].max()
+                r = max_round
+            except Exception:
+                break
+
+    driver_stats = {}
+    
+    for (fetch_year, fetch_round) in races_to_fetch:
+        try:
+            # Resolve the track type of this historical race
+            hist_event = fastf1.get_event(fetch_year, fetch_round)
+            hist_track_type = _get_track_type(hist_event['EventName'])
+            weight = _track_similarity_weight(current_track_type, hist_track_type)
+            
+            q = fastf1.get_session(fetch_year, fetch_round, 'Q')
+            q.load(telemetry=False, weather=False, messages=False)
+            
+            r_session = fastf1.get_session(fetch_year, fetch_round, 'R')
+            r_session.load(telemetry=False, weather=False, messages=False)
+            
+            q_laps = q.laps
+            r_laps = r_session.laps
+            
+            if q_laps is None or r_laps is None or len(q_laps) == 0 or len(r_laps) == 0:
+                continue
+                
+            drivers = pd.unique(q_laps['Driver'])
+            q_paces = {}
+            r_paces = {}
+            
+            # Quali pace
+            for drv in drivers:
+                drv_laps = q_laps[q_laps['Driver'] == drv]
+                fastest = drv_laps.pick_fastest()
+                if not pd.isnull(fastest['LapTime']):
+                    q_paces[drv] = fastest['LapTime'].total_seconds()
+            
+            if not q_paces: continue
+            pole_pace = min(q_paces.values())
+            
+            # Race pace
+            for drv in drivers:
+                drv_laps = r_laps[r_laps['Driver'] == drv]
+                clean_laps = drv_laps[
+                    (drv_laps['TrackStatus'] == '1') & 
+                    pd.isnull(drv_laps['PitOutTime']) & 
+                    pd.isnull(drv_laps['PitInTime']) &
+                    (drv_laps['LapNumber'] > 1)
+                ]
+                
+                if len(clean_laps) > 5:
+                    times = clean_laps['LapTime'].dt.total_seconds().dropna().values
+                    if len(times) > 0:
+                        q1, q3 = np.percentile(times, [25, 75])
+                        iqr = q3 - q1
+                        valid_times = times[(times >= q1 - 1.5*iqr) & (times <= q3 + 1.5*iqr)]
+                        if len(valid_times) > 0:
+                            r_paces[drv] = np.median(valid_times)
+                            
+            if not r_paces: continue
+            fastest_r_pace = min(r_paces.values())
+            
+            # Compute Deltas (with track similarity weight)
+            for drv in drivers:
+                if drv in q_paces and drv in r_paces:
+                    q_delta = q_paces[drv] - pole_pace
+                    r_delta = r_paces[drv] - fastest_r_pace
+                    sunday_conv = q_delta - r_delta
+                    
+                    if drv not in driver_stats:
+                        driver_stats[drv] = {'conversions': [], 'r_deltas': [], 'weights': []}
+                    driver_stats[drv]['conversions'].append(sunday_conv)
+                    driver_stats[drv]['r_deltas'].append(r_delta)
+                    driver_stats[drv]['weights'].append(weight)
+                    
+        except Exception as e:
+            continue
+
+    # Weighted Aggregate
+    season_trends = {}
+    for drv, stats in driver_stats.items():
+        if len(stats['conversions']) > 0:
+            weights = np.array(stats['weights'])
+            conversions = np.array(stats['conversions'])
+            r_deltas = np.array(stats['r_deltas'])
+            
+            avg_conv = np.average(conversions, weights=weights)
+            avg_r_delta = np.average(r_deltas, weights=weights)
+            season_trends[drv] = {
+                'sunday_conversion': avg_conv, # Positive = better on Sunday
+                'power_rank_delta': avg_r_delta # Lower = faster race pace
+            }
+            
+    return season_trends
+
+
 # ── Lap filter ─────────────────────────────────────────────────────────────
 def filter_laps(laps):
     """
@@ -167,8 +403,8 @@ def extract_race_pace_and_deg(session):
             # Keep only laps on the dominant compound
             stint_df = stint_df[stint_df['Compound'] == compound]
 
-            # Raw stint must be ≥ 7 laps to qualify as a long run
-            if len(stint_df) < 7:
+            # Raw stint must be ≥ 4 laps to qualify as a long run
+            if len(stint_df) < 4:
                 continue
 
             x_raw = stint_df['TyreLife'].values.astype(float)
@@ -184,8 +420,8 @@ def extract_race_pace_and_deg(session):
             x = x_raw[track_ok.values]
             y = y_raw[track_ok.values]
 
-            # After removing yellows, still need ≥ 5 green-flag laps
-            if len(x) < 5:
+            # After removing yellows, still need ≥ 3 green-flag laps
+            if len(x) < 3:
                 continue
 
             # IQR outlier removal (traffic, mistakes)
@@ -194,75 +430,120 @@ def extract_race_pace_and_deg(session):
             mask = (y >= q1 - 1.5 * iqr) & (y <= q3 + 1.5 * iqr)
             x_clean, y_clean = x[mask], y[mask]
 
-            if len(x_clean) < 5:
+            if len(x_clean) < 3:
                 continue
 
             # Linear fit: y = mx + c
-            m, c = np.polyfit(x_clean, y_clean, 1)
-            m = max(m, 0.01)   # degradation floor
+            m_raw, c_raw = np.polyfit(x_clean, y_clean, 1)
+            
+            # ── Polyfit Sanity Check ──────────────────────────────────
+            # If the IQR filter fails to catch an outlier on a short 3-lap run, 
+            # it produces absurd slopes (e.g., 20s/lap) and negative base paces.
+            # We strictly bound acceptable tire degradation (-0.05 to 0.4 seconds/lap).
+            # Note: Fuel burn causes lap times to drop by ~0.05s per lap. On low 
+            # degradation tracks (like Monza), raw lap time slopes can legitimately 
+            # be slightly negative (-0.02) because fuel burn outpaces tire wear.
+            if m_raw > 0.4 or m_raw < -0.05:
+                continue
+                
+            # Base pace must be a physically possible lap time (>40s)
+            if c_raw < 40.0:
+                continue
+                
+            m = float(m_raw)
+            c = float(c_raw)
+
+            # ── Pace Sanity Check ─────────────────────────────────────
+            # Reject aero-rake / constant-velocity runs. If the base pace 
+            # is extremely slow compared to the driver's fastest lap 
+            # (> 108%), it's not a genuine race-pace stint.
+            fastest_lap = driver_fastest_lap.get(driver)
+            if fastest_lap and c > fastest_lap * 1.08:
+                continue
 
             # Keep the most representative run per compound (lowest base)
             if compound not in driver_stats or c < driver_stats[compound]['base_pace']:
-                driver_stats[compound] = {'base_pace': float(c), 'deg_slope': float(m)}
+                driver_stats[compound] = {'base_pace': c, 'deg_slope': m}
                 field_pace.setdefault(compound, []).append(c)
 
         if driver_stats:
             raw_stats[driver] = driver_stats
 
-    # ── Pass 2: build field-average compound deltas ───────────────────
-    field_avg = {c: float(np.median(v)) for c, v in field_pace.items()}
+    # ── Pass 2: Calculate Compound Deltas ─────────────────────────────────
+    # Calculate empirical deltas by comparing base paces for drivers who 
+    # completed heavy-fuel long runs on MULTIPLE compounds in the same session.
+    # This completely eliminates Simpson's Paradox and avoids fuel-load skew.
+    
+    deltas_soft_med = []
+    deltas_med_hard = []
+    
+    for driver, stats in raw_stats.items():
+        if 'SOFT' in stats and 'MEDIUM' in stats:
+            deltas_soft_med.append(stats['MEDIUM']['base_pace'] - stats['SOFT']['base_pace'])
+        if 'MEDIUM' in stats and 'HARD' in stats:
+            deltas_med_hard.append(stats['HARD']['base_pace'] - stats['MEDIUM']['base_pace'])
+            
+    # Calculate median deltas, fallback to a standard realistic 0.4s if we don't have enough data
+    soft_med_delta = float(np.median(deltas_soft_med)) if len(deltas_soft_med) >= 2 else 0.4
+    med_hard_delta = float(np.median(deltas_med_hard)) if len(deltas_med_hard) >= 2 else 0.4
+    
+    # Ensure deltas are logically positive (HARD > MEDIUM > SOFT) and bounded
+    soft_med_delta = max(min(soft_med_delta, 1.5), 0.1)
+    med_hard_delta = max(min(med_hard_delta, 1.5), 0.1)
+    
+    # Build a unified pace offset map relative to SOFT
+    COMPOUND_OFFSETS = {
+        'SOFT': 0.0,
+        'MEDIUM': soft_med_delta,
+        'HARD': soft_med_delta + med_hard_delta
+    }
 
-    # ── Pass 3: fill missing compounds + Global Fallback ─────────────
+    # ── Pass 3: Fill missing compounds ────────────────────────────────────
     race_stats = {}
     for driver, stats in raw_stats.items():
         filled = dict(stats)
         known_compounds = list(stats.keys())
+        
         for target in COMPOUNDS:
             if target in filled:
                 continue
-            for source in known_compounds:
-                if source in field_avg and target in field_avg:
-                    delta = field_avg[target] - field_avg[source]
-                    filled[target] = {
-                        'base_pace': stats[source]['base_pace'] + delta,
-                        'deg_slope': stats[source]['deg_slope'],
-                    }
+                
+            # Find a known source to project from (prefer Medium, then Soft, then Hard)
+            source = None
+            for pref in ['MEDIUM', 'SOFT', 'HARD']:
+                if pref in known_compounds:
+                    source = pref
                     break
+                    
+            if source:
+                # Delta to add to the source to get the target
+                delta = COMPOUND_OFFSETS[target] - COMPOUND_OFFSETS[source]
+                filled[target] = {
+                    'base_pace': stats[source]['base_pace'] + delta,
+                    'deg_slope': stats[source]['deg_slope'],
+                }
+                
         race_stats[driver] = filled
 
-    # ── Global Fallback: rescue drivers with zero qualifying stints ───
-    #    Use their fastest flying lap + heavy-fuel penalty as a baseline.
-    #    Degradation slope defaults to the field median slope.
+    # ── Global Fallback: rescue drivers with zero long runs ───────────────
+    #    Use the field median SOFT pace as a baseline, then apply standard deltas.
     field_deg_slopes = []
     for stats in race_stats.values():
         for cstats in stats.values():
             field_deg_slopes.append(cstats['deg_slope'])
     median_deg = float(np.median(field_deg_slopes)) if field_deg_slopes else 0.06
 
-    # Determine field-median base pace for compound delta reference
-    if not field_avg:
-        # Edge case: no stints at all (shouldn't happen, but guard)
-        field_avg = {c: 90.0 for c in COMPOUNDS}
+    soft_paces = [s['SOFT']['base_pace'] for s in race_stats.values() if 'SOFT' in s]
+    fallback_soft_pace = float(np.median(soft_paces)) if soft_paces else 90.0
 
     for driver in drivers:
         if driver in race_stats:
             continue  # already has stint data
 
-        fastest = driver_fastest_lap.get(driver)
-        if fastest is None:
-            continue  # no lap data at all — truly absent
-
-        fallback_base = fastest + HEAVY_FUEL_PENALTY
-
         filled = {}
         for compound in COMPOUNDS:
-            # Offset from SOFT field avg to target compound field avg
-            soft_avg = field_avg.get('SOFT', fallback_base)
-            target_avg = field_avg.get(compound, soft_avg)
-            compound_delta = target_avg - soft_avg
-
             filled[compound] = {
-                'base_pace': fallback_base + compound_delta,
+                'base_pace': fallback_soft_pace + COMPOUND_OFFSETS[compound],
                 'deg_slope': median_deg,
             }
         race_stats[driver] = filled

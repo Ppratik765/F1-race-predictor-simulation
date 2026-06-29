@@ -22,6 +22,8 @@ def run_race_sim(
     num_laps=50,
     num_pitstops=1,
     pitstop_time_loss=22.0,
+    season_trends=None,
+    weather_context=None,
 ):
     """
     Fully-vectorised race simulation.
@@ -75,6 +77,90 @@ def run_race_sim(
             })
             base_pace[i, cidx] = cstats['base_pace']
             deg_slope[i, cidx] = cstats['deg_slope']
+
+    # ── Qualifying Pace Anchor ─────────────────────────────────────────
+    # Free Practice 2 lap times are notoriously distorted by unknown fuel loads.
+    # To prevent backmarkers (who ran low-fuel FP2 sims) from beating Pole sitters, 
+    # we anchor the extracted base pace using their true qualifying hierarchy.
+    # 1 grid drop ≈ +0.12s lap time penalty in expected race pace.
+    if grid_positions:
+        pole_driver = min(grid_positions, key=grid_positions.get)
+        if pole_driver in drivers:
+            pole_idx = drivers.index(pole_driver)
+            pole_pace = base_pace[pole_idx].copy()
+        else:
+            pole_pace = np.min(base_pace, axis=0)
+            
+        for i, d in enumerate(drivers):
+            grid_pos = grid_positions.get(d, 20)
+            # Calculate what this driver's pace *should* be based on qualifying
+            expected_pace = pole_pace + ((grid_pos - 1) * 0.12)
+            
+            # Apply Season Trend Modifier
+            if season_trends and d in season_trends:
+                sunday_conv = season_trends[d].get('sunday_conversion', 0.0)
+                sunday_bonus = np.clip(sunday_conv, -0.4, 0.4)
+                expected_pace -= sunday_bonus
+            
+            # Apply bidirectional clamping:
+            # - A backmarker cannot magically be more than 0.2s faster than their expected grid pace
+            # - A front-runner cannot be severely punished (max +0.5s) if they ran heavy fuel in FP2
+            base_pace[i] = np.maximum(base_pace[i], expected_pace - 0.2)
+            base_pace[i] = np.minimum(base_pace[i], expected_pace + 0.5)
+
+    # ── Generic Degradation Anchor ─────────────────────────────────────────────
+    # Short 3-lap practice stints often produce flat or negative slopes, 
+    # resulting in zero tire wear. To prevent drivers from dominating the 
+    # race by never losing grip, we floor their tire degradation to at 
+    # least 50% of the field median. We use a relaxed absolute floor (-0.02) 
+    # to still permit fuel-burn offsets on smooth tracks like Monza.
+    for cidx in range(len(COMPOUND_KEYS)):
+        median_deg = np.median(deg_slope[:, cidx])
+        deg_floor = max(-0.02, median_deg * 0.5)
+        deg_slope[:, cidx] = np.maximum(deg_slope[:, cidx], deg_floor)
+
+    # ── Qualifying Degradation Anchor (Setup Correction) ────────────────
+    # F1 teams often have terrible tire wear in Friday practice, but fix 
+    # their suspension/aero setups overnight. A car that qualifies P2 
+    # inherently has excellent downforce and tire management. We calculate 
+    # an expected tire degradation based on True Grid Position and blend it 
+    # with the FP2 data to simulate overnight setup improvements.
+    if grid_positions:
+        for cidx in range(len(COMPOUND_KEYS)):
+            median_field_deg = np.median(deg_slope[:, cidx])
+            
+            for i, d in enumerate(drivers):
+                grid_pos = grid_positions.get(d, 20)
+                # Front runners expect better deg, backmarkers expect worse (+0.003s/lap per grid drop)
+                expected_deg = median_field_deg + ((grid_pos - 10) * 0.003)
+                
+                # Apply Season Trend Modifier to Degradation
+                if season_trends and d in season_trends:
+                    sunday_conv = season_trends[d].get('sunday_conversion', 0.0)
+                    deg_bonus = np.clip(sunday_conv * 0.05, -0.015, 0.015)
+                    expected_deg -= deg_bonus
+
+                # F1 race pace is heavily dictated by Qualifying speed. We aggressively 
+                # blend (30% FP2, 70% Expected) to simulate overnight setup fixes.
+                blended_deg = (deg_slope[i, cidx] * 0.3) + (expected_deg * 0.7)
+                
+                # Strict clamps to preserve the true racing hierarchy
+                deg_slope[i, cidx] = np.clip(blended_deg, expected_deg - 0.015, expected_deg + 0.015)
+
+    # ── Weather-Adjusted Tire Degradation ──────────────────────────────
+    # Track temperature has a massive impact on tire wear. Hot surfaces
+    # (Bahrain ~50°C) dramatically increase graining and blistering.
+    # Baseline = 30°C.  Every +10°C → +15% more deg.  Every -10°C → -10% less deg.
+    if weather_context:
+        track_temp = weather_context.get('track_temp', 30.0)
+        temp_delta = track_temp - 30.0  # degrees above baseline
+        if temp_delta > 0:
+            temp_scale = 1.0 + (temp_delta / 10.0) * 0.15
+        else:
+            temp_scale = 1.0 + (temp_delta / 10.0) * 0.10
+        # Clamp between 0.7x and 1.6x to prevent extreme distortion
+        temp_scale = np.clip(temp_scale, 0.7, 1.6)
+        deg_slope *= temp_scale
 
     # ── Strategy: compound sequence per stint ─────────────────────────
     #    stint_compounds[s] = compound index used during stint s
