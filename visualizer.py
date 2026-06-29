@@ -5,7 +5,8 @@ import numpy as np
 import os
 import argparse
 import textwrap
-
+import matplotlib.image as mpimg
+from matplotlib.patches import Circle
 # ── Aesthetic Configuration ──────────────────────────────────────────────────
 # F1 Light & Clean Storytelling Theme
 plt.rcParams.update({
@@ -47,8 +48,29 @@ def setup_output_dir(year, race):
     return prefix
 
 def add_watermark(fig, year, race):
-    fig.text(0.99, 0.01, f'Monte Carlo Sim ({year} {race.title()})', 
-             fontsize=9, color='#aaaaaa', ha='right', va='bottom', alpha=0.7)
+    # Bottom right corner watermark text
+    fig.text(0.95, 0.02, 'Priyanshu Pratik', 
+             fontsize=9, color='#aaaaaa', ha='right', va='center', fontweight='bold', alpha=0.8)
+    
+    # Add circular image
+    try:
+        img_path = r"C:\Users\ppmak\.gemini\antigravity-ide\brain\562f5954-531d-4f53-94aa-b5c965efc8d3\media__1782760359196.png"
+        if os.path.exists(img_path):
+            img = mpimg.imread(img_path)
+            
+            # Create a small axes for the image in the bottom right (slightly smaller)
+            ax_img = fig.add_axes([0.96, 0.005, 0.03, 0.03], anchor='C', zorder=10)
+            ax_img.axis('off')
+            
+            im = ax_img.imshow(img)
+            
+            # Create circular clip path
+            center = (img.shape[1]/2, img.shape[0]/2)
+            radius = min(center[0], center[1])
+            patch = Circle(center, radius, transform=ax_img.transData)
+            im.set_clip_path(patch)
+    except Exception as e:
+        print(f"Watermark image error: {e}")
 
 # ── Chart 1: The Championship Contenders (Win, Podium & Points) ──────────────
 def plot_win_probabilities(results_file, prefix, year, race):
@@ -269,6 +291,24 @@ def plot_joyplot(raw_data_file, prefix, year, race):
                         label=driver,
                         ax=ax,
                         warn_singular=False)
+            
+            # Add driver label at the peak of their KDE curve
+            try:
+                line = ax.lines[-1]
+                x_data = line.get_xdata()
+                y_data = line.get_ydata()
+                max_idx = np.argmax(y_data)
+                peak_x = x_data[max_idx]
+                peak_y = y_data[max_idx]
+                
+                ax.text(peak_x, peak_y, f" {driver} ", 
+                        color=get_color(driver), 
+                        fontsize=9, 
+                        fontweight='bold',
+                        ha='center', va='bottom',
+                        bbox=dict(facecolor='white', alpha=0.6, edgecolor='none', pad=0.5))
+            except Exception:
+                pass
             
         ax.set_title(tier_name, loc='left', fontweight='bold', fontsize=12)
         ax.set_xlim(0.5, 20.5)
