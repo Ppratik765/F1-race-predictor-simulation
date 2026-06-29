@@ -53,7 +53,7 @@ def _print_table(title, headers, rows):
 
 # ── Main ──────────────────────────────────────────────────────────────────
 
-def main(year=2023, race='Bahrain', num_iterations=100_000):
+def main(year=2026, race='Austria', num_iterations=500_000):
     print(f"\n{'─' * 60}")
     print(f"  F1 Monte Carlo Simulation  ·  {year} {race}")
     print(f"  Iterations: {num_iterations:,}")

@@ -160,7 +160,11 @@ def run_race_sim(
         #    Cap total penalty per lap at 0.6 s to prevent compounding.
         sort_idx    = np.argsort(total_race_time, axis=1)
         sorted_time = np.take_along_axis(total_race_time, sort_idx, axis=1)
-        gaps        = np.diff(sorted_time, axis=1)            # (iters, D-1)
+
+        # Safe gap calculation: inf − inf produces NaN, which we replace
+        # with inf so those DNF'd cars receive zero penalty.
+        gaps = sorted_time[:, 1:] - sorted_time[:, :-1]     # (iters, D-1)
+        gaps = np.where(np.isnan(gaps), np.inf, gaps)
 
         raw_penalty = np.clip((2.0 - gaps) * 0.3, 0.0, 0.6)  # (iters, D-1)
 
