@@ -209,9 +209,12 @@ def extract_real_grid(quali_session):
     grid = {}
     for _, row in results.iterrows():
         abbr = row.get('Abbreviation', '')
-        # GridPosition is the actual starting grid; Position is quali result
-        pos = row.get('GridPosition', row.get('Position', None))
-        if abbr and pos is not None:
+        pos = row.get('GridPosition')
+        
+        if pd.isna(pos) or pos == 0:
+            pos = row.get('Position')
+            
+        if abbr and not pd.isna(pos):
             try:
                 pos_int = int(pos)
                 if pos_int > 0:
