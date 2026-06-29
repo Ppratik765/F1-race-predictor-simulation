@@ -21,6 +21,7 @@ from data_pipeline import (
     extract_quali_stats,
     extract_race_pace_and_deg,
     extract_real_grid,
+    extract_reliability_stats,
 )
 from quali_engine import run_quali_sim
 from race_engine import run_race_sim
@@ -202,6 +203,7 @@ def main(year=2025, race='Monza', num_iterations=200_000):
     print("⏳ Extracting driver statistics …")
     quali_stats = extract_quali_stats(session_fp3)
     race_stats  = extract_race_pace_and_deg(session_fp2)
+    reliability_stats = extract_reliability_stats(year, race)
 
     if not quali_stats or not race_stats:
         print("✗ Could not extract stats. Check session data.")
@@ -271,6 +273,7 @@ def main(year=2025, race='Monza', num_iterations=200_000):
 
     finishing_probs, final_ranks, race_drivers, active_mask = run_race_sim(
         race_stats=race_stats,
+        reliability_stats=reliability_stats,
         grid_positions=sim_grid,
         num_iterations=num_iterations,
         num_laps=num_laps,
@@ -351,4 +354,4 @@ def main(year=2025, race='Monza', num_iterations=200_000):
 
 
 if __name__ == "__main__":
-    main(year=2023, race='Bahrain', num_iterations=200_000)
+    main(year=2026, race='Austria', num_iterations=200_000)

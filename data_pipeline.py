@@ -106,73 +106,67 @@ def extract_quali_stats(session):
 # ── Race-pace / degradation extractor ──────────────────────────────────────
 def extract_race_pace_and_deg(session):
     """
-    Analyses FP2 long runs to determine:
-      • base_pace  (intercept of linear fit, i.e. lap time at TyreLife = 0)
-      • deg_slope  (seconds lost per additional lap on the tyre)
-
-    Missing-compound fallback logic:
-      After computing every driver × compound pair that has data, we build a
-      field-average compound-delta matrix.  Any driver who is missing a compound
-      gets their pace estimated as:
-          known_pace + field_delta(known → missing)
-      This eliminates all hardcoded lap-time constants.
-
-    Returns:
-        dict[driver] -> dict[compound] -> {'base_pace': float, 'deg_slope': float}
+    Analyses FP2 continuous stints to isolate genuine heavy-fuel long runs.
+    Filters out short, low-fuel qualifying simulations by enforcing a strict
+    minimum of 7 consecutive laps per continuous stint.
     """
     laps = session.laps
     filtered_laps = filter_laps(laps)
     drivers = pd.unique(filtered_laps['Driver'])
 
     COMPOUNDS = ['SOFT', 'MEDIUM', 'HARD']
-
-    # ── Pass 1: compute raw stats for every driver × compound with data ──
-    raw_stats = {}          # driver -> {compound -> {base_pace, deg_slope}}
-    field_pace = {}         # compound -> [list of base paces across field]
+    raw_stats = {}          
+    field_pace = {}         
 
     for driver in drivers:
         driver_laps = filtered_laps.pick_driver(driver)
         driver_stats = {}
 
-        for compound in COMPOUNDS:
-            compound_laps = driver_laps[driver_laps['Compound'] == compound]
-            if len(compound_laps) < 5:
+        # Group by both Stint and Compound to isolate continuous runs out of the pits
+        stints = driver_laps.groupby(['Stint', 'Compound'])
+
+        for (stint_num, compound), stint_df in stints:
+            if compound not in COMPOUNDS:
                 continue
 
-            x = compound_laps['TyreLife'].values.astype(float)
-            y = compound_laps['LapTime'].dt.total_seconds().values
+            # Strict threshold: Less than 7 laps means it's a qualifying sim or aborted run
+            if len(stint_df) < 7:
+                continue
 
-            # IQR outlier removal
+            x = stint_df['TyreLife'].values.astype(float)
+            y = stint_df['LapTime'].dt.total_seconds().values
+
+            # IQR outlier removal (traffic, mistakes)
             q1, q3 = np.percentile(y, [25, 75])
             iqr = q3 - q1
             mask = (y >= q1 - 1.5 * iqr) & (y <= q3 + 1.5 * iqr)
             x_clean, y_clean = x[mask], y[mask]
 
-            if len(x_clean) < 4:
+            if len(x_clean) < 5:
                 continue
 
+            # Fit line: y = mx + c
             m, c = np.polyfit(x_clean, y_clean, 1)
-            m = max(m, 0.01)  # floor: degradation can't be negative
+            m = max(m, 0.01)  
 
-            driver_stats[compound] = {'base_pace': float(c), 'deg_slope': float(m)}
-            field_pace.setdefault(compound, []).append(c)
+            # If a driver has multiple long runs on one compound, prioritize the more representative (lower base pace) run
+            if compound not in driver_stats or c < driver_stats[compound]['base_pace']:
+                driver_stats[compound] = {'base_pace': float(c), 'deg_slope': float(m)}
+                field_pace.setdefault(compound, []).append(c)
 
         if driver_stats:
             raw_stats[driver] = driver_stats
 
-    # ── Pass 2: build field-average compound deltas ──────────────────────
+    # Pass 2 & 3: Field-average compound delta fallbacks
     field_avg = {c: float(np.median(v)) for c, v in field_pace.items()}
 
-    # ── Pass 3: fill missing compounds per driver using deltas ───────────
     race_stats = {}
     for driver, stats in raw_stats.items():
-        filled = dict(stats)  # start with what we have
-
+        filled = dict(stats)
         known_compounds = list(stats.keys())
         for target in COMPOUNDS:
             if target in filled:
                 continue
-            # Find a known compound to derive from
             for source in known_compounds:
                 if source in field_avg and target in field_avg:
                     delta = field_avg[target] - field_avg[source]
@@ -181,11 +175,9 @@ def extract_race_pace_and_deg(session):
                         'deg_slope': stats[source]['deg_slope'],
                     }
                     break
-
         race_stats[driver] = filled
 
     return race_stats
-
 
 # ── Real qualifying grid extractor ─────────────────────────────────────────
 def extract_real_grid(quali_session):
@@ -223,6 +215,96 @@ def extract_real_grid(quali_session):
                 continue
 
     return grid if grid else None
+
+
+# ── Reliability extractor ──────────────────────────────────────────────────
+def extract_reliability_stats(year, current_race):
+    """
+    Extracts dynamic DNF (Did Not Finish) probabilities per driver.
+    Looks at the 5 immediately preceding races. If early in the season,
+    wraps around to the end of the previous year.
+    
+    Returns:
+        dict[driver] -> float (per_lap_dnf_probability)
+    """
+    try:
+        current_event = fastf1.get_event(year, current_race)
+        current_round = current_event['RoundNumber']
+    except Exception:
+        # Fallback if event is not found
+        return {}
+
+    races_to_fetch = []
+    # We want 5 races
+    r = current_round - 1
+    y = year
+    
+    while len(races_to_fetch) < 5:
+        if r > 0:
+            races_to_fetch.append((y, r))
+            r -= 1
+        else:
+            y -= 1
+            try:
+                prev_schedule = fastf1.get_event_schedule(y)
+                # Filter out pre-season testing (usually RoundNumber 0)
+                max_round = prev_schedule['RoundNumber'].max()
+                r = max_round
+            except Exception:
+                break # Cannot fetch previous year
+
+    driver_races = {}
+    driver_dnfs = {}
+
+    for (fetch_year, fetch_round) in races_to_fetch:
+        try:
+            # Lightning-fast load without telemetry
+            s = fastf1.get_session(fetch_year, fetch_round, 'R')
+            s.load(telemetry=False, weather=False, laps=False)
+            
+            if s.results is None or s.results.empty:
+                continue
+                
+            for _, row in s.results.iterrows():
+                abbr = row.get('Abbreviation')
+                if not abbr or pd.isna(abbr):
+                    continue
+                    
+                status = str(row.get('Status', '')).strip().lower()
+                
+                # A driver entered the race
+                driver_races[abbr] = driver_races.get(abbr, 0) + 1
+                
+                # Check if status is a DNF (not finished and not +Laps)
+                if status != 'finished' and 'lap' not in status:
+                    driver_dnfs[abbr] = driver_dnfs.get(abbr, 0) + 1
+                    
+        except Exception:
+            continue
+            
+    reliability_stats = {}
+    
+    # Calculate per-lap probabilities (Assumed 50 laps per race)
+    # Floor: 0.001, Cap: 0.008
+    grid_total_dnfs = sum(driver_dnfs.values())
+    grid_total_races = sum(driver_races.values())
+    
+    avg_dnf_rate = (grid_total_dnfs / (grid_total_races * 50)) if grid_total_races > 0 else 0.003
+    rookie_penalty = min(avg_dnf_rate * 1.2, 0.008)
+    
+    # Populate the stats
+    # We will compute the stats for drivers we found, but return a defaultdict-like behaviour
+    # via rookie_penalty for any driver not in this dict during the simulation.
+    for driver, races in driver_races.items():
+        dnfs = driver_dnfs.get(driver, 0)
+        rate = dnfs / (races * 50.0)
+        smoothed_rate = np.clip(rate, 0.001, 0.008)
+        reliability_stats[driver] = smoothed_rate
+        
+    # Store the rookie penalty in a special key so the engine can use it for unknown drivers
+    reliability_stats['__ROOKIE_FALLBACK__'] = np.clip(rookie_penalty, 0.001, 0.008)
+
+    return reliability_stats
 
 
 if __name__ == "__main__":
