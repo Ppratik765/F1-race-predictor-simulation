@@ -106,35 +106,87 @@ def extract_quali_stats(session):
 # ── Race-pace / degradation extractor ──────────────────────────────────────
 def extract_race_pace_and_deg(session):
     """
-    Analyses FP2 continuous stints to isolate genuine heavy-fuel long runs.
-    Filters out short, low-fuel qualifying simulations by enforcing a strict
-    minimum of 7 consecutive laps per continuous stint.
+    Analyses practice / sprint stints to determine race-pace parameters.
+
+    Stint Integrity Protocol:
+      1. Work on RAW laps (before track-status filtering) so that yellow-flag
+         interruptions don't fragment a genuine 15-lap long run into two
+         sub-threshold 6-lap shards.
+      2. Identify continuous raw stints using the FastF1 'Stint' column.
+      3. Only THEN skip individual anomalous laps (yellows, pit-lane cuts)
+         within the stint — the remaining green-flag laps stay grouped.
+      4. If a driver has zero stints ≥ 7 laps, compute a Global Fallback
+         from their fastest single flying lap + a heavy-fuel penalty so
+         they are never deleted from the simulation.
+
+    Returns:
+        dict[driver] -> dict[compound] -> {'base_pace': float, 'deg_slope': float}
     """
     laps = session.laps
-    filtered_laps = filter_laps(laps)
-    drivers = pd.unique(filtered_laps['Driver'])
+
+    # ── Step 0: remove only pit in/out laps (keep ALL track statuses) ──
+    try:
+        raw_laps = laps.pick_accurate()
+    except Exception:
+        raw_laps = laps.copy()
+
+    raw_laps = raw_laps.dropna(subset=['LapTime', 'TyreLife', 'Compound'])
+    drivers = pd.unique(raw_laps['Driver'])
 
     COMPOUNDS = ['SOFT', 'MEDIUM', 'HARD']
-    raw_stats = {}          
-    field_pace = {}         
+    HEAVY_FUEL_PENALTY = 4.5   # seconds added to a quali-sim lap to estimate race pace
+
+    raw_stats  = {}    # driver -> {compound -> {base_pace, deg_slope}}
+    field_pace = {}    # compound -> [list of base paces across field]
+
+    # ── Also collect fastest flying lap per driver for global fallback ──
+    driver_fastest_lap = {}
 
     for driver in drivers:
-        driver_laps = filtered_laps.pick_driver(driver)
+        driver_laps = raw_laps[raw_laps['Driver'] == driver]
         driver_stats = {}
 
-        # Group by both Stint and Compound to isolate continuous runs out of the pits
-        stints = driver_laps.groupby(['Stint', 'Compound'])
+        # Record the driver's fastest clean lap (for fallback)
+        lap_times_all = driver_laps['LapTime'].dt.total_seconds().dropna()
+        if len(lap_times_all) > 0:
+            driver_fastest_lap[driver] = float(lap_times_all.min())
 
-        for (stint_num, compound), stint_df in stints:
+        # ── Group by the RAW Stint number (preserves continuity) ──────
+        if 'Stint' not in driver_laps.columns:
+            continue
+
+        stints = driver_laps.groupby('Stint')
+
+        for stint_num, stint_df in stints:
+            # Determine dominant compound for this stint
+            compound_counts = stint_df['Compound'].value_counts()
+            compound = compound_counts.index[0]
             if compound not in COMPOUNDS:
                 continue
 
-            # Strict threshold: Less than 7 laps means it's a qualifying sim or aborted run
+            # Keep only laps on the dominant compound
+            stint_df = stint_df[stint_df['Compound'] == compound]
+
+            # Raw stint must be ≥ 7 laps to qualify as a long run
             if len(stint_df) < 7:
                 continue
 
-            x = stint_df['TyreLife'].values.astype(float)
-            y = stint_df['LapTime'].dt.total_seconds().values
+            x_raw = stint_df['TyreLife'].values.astype(float)
+            y_raw = stint_df['LapTime'].dt.total_seconds().values
+
+            # ── Skip anomalous laps WITHOUT fragmenting the stint ─────
+            #    Flag laps under yellow / VSC / SC (TrackStatus != '1')
+            if 'TrackStatus' in stint_df.columns:
+                track_ok = stint_df['TrackStatus'].astype(str).str.strip() == '1'
+            else:
+                track_ok = pd.Series(True, index=stint_df.index)
+
+            x = x_raw[track_ok.values]
+            y = y_raw[track_ok.values]
+
+            # After removing yellows, still need ≥ 5 green-flag laps
+            if len(x) < 5:
+                continue
 
             # IQR outlier removal (traffic, mistakes)
             q1, q3 = np.percentile(y, [25, 75])
@@ -145,11 +197,11 @@ def extract_race_pace_and_deg(session):
             if len(x_clean) < 5:
                 continue
 
-            # Fit line: y = mx + c
+            # Linear fit: y = mx + c
             m, c = np.polyfit(x_clean, y_clean, 1)
-            m = max(m, 0.01)  
+            m = max(m, 0.01)   # degradation floor
 
-            # If a driver has multiple long runs on one compound, prioritize the more representative (lower base pace) run
+            # Keep the most representative run per compound (lowest base)
             if compound not in driver_stats or c < driver_stats[compound]['base_pace']:
                 driver_stats[compound] = {'base_pace': float(c), 'deg_slope': float(m)}
                 field_pace.setdefault(compound, []).append(c)
@@ -157,9 +209,10 @@ def extract_race_pace_and_deg(session):
         if driver_stats:
             raw_stats[driver] = driver_stats
 
-    # Pass 2 & 3: Field-average compound delta fallbacks
+    # ── Pass 2: build field-average compound deltas ───────────────────
     field_avg = {c: float(np.median(v)) for c, v in field_pace.items()}
 
+    # ── Pass 3: fill missing compounds + Global Fallback ─────────────
     race_stats = {}
     for driver, stats in raw_stats.items():
         filled = dict(stats)
@@ -175,6 +228,43 @@ def extract_race_pace_and_deg(session):
                         'deg_slope': stats[source]['deg_slope'],
                     }
                     break
+        race_stats[driver] = filled
+
+    # ── Global Fallback: rescue drivers with zero qualifying stints ───
+    #    Use their fastest flying lap + heavy-fuel penalty as a baseline.
+    #    Degradation slope defaults to the field median slope.
+    field_deg_slopes = []
+    for stats in race_stats.values():
+        for cstats in stats.values():
+            field_deg_slopes.append(cstats['deg_slope'])
+    median_deg = float(np.median(field_deg_slopes)) if field_deg_slopes else 0.06
+
+    # Determine field-median base pace for compound delta reference
+    if not field_avg:
+        # Edge case: no stints at all (shouldn't happen, but guard)
+        field_avg = {c: 90.0 for c in COMPOUNDS}
+
+    for driver in drivers:
+        if driver in race_stats:
+            continue  # already has stint data
+
+        fastest = driver_fastest_lap.get(driver)
+        if fastest is None:
+            continue  # no lap data at all — truly absent
+
+        fallback_base = fastest + HEAVY_FUEL_PENALTY
+
+        filled = {}
+        for compound in COMPOUNDS:
+            # Offset from SOFT field avg to target compound field avg
+            soft_avg = field_avg.get('SOFT', fallback_base)
+            target_avg = field_avg.get(compound, soft_avg)
+            compound_delta = target_avg - soft_avg
+
+            filled[compound] = {
+                'base_pace': fallback_base + compound_delta,
+                'deg_slope': median_deg,
+            }
         race_stats[driver] = filled
 
     return race_stats
