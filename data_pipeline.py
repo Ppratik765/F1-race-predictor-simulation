@@ -187,5 +187,40 @@ def extract_race_pace_and_deg(session):
     return race_stats
 
 
+# ── Real qualifying grid extractor ─────────────────────────────────────────
+def extract_real_grid(quali_session):
+    """
+    Pulls the actual qualifying grid from a loaded Qualifying session.
+
+    Uses session.results which contains 'Abbreviation' and 'GridPosition'
+    (or 'Position') for every driver who participated.
+
+    Returns:
+        dict[driver_abbreviation] -> int grid position  (1 = pole)
+        Returns None if the session has no results.
+    """
+    try:
+        results = quali_session.results
+        if results is None or results.empty:
+            return None
+    except Exception:
+        return None
+
+    grid = {}
+    for _, row in results.iterrows():
+        abbr = row.get('Abbreviation', '')
+        # GridPosition is the actual starting grid; Position is quali result
+        pos = row.get('GridPosition', row.get('Position', None))
+        if abbr and pos is not None:
+            try:
+                pos_int = int(pos)
+                if pos_int > 0:
+                    grid[abbr] = pos_int
+            except (ValueError, TypeError):
+                continue
+
+    return grid if grid else None
+
+
 if __name__ == "__main__":
     pass
