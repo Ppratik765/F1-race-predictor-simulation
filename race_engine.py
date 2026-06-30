@@ -6,7 +6,9 @@ State-machine loop that simulates a full race distance lap-by-lap across
 
 Key mechanics:
   • Lap time = base_pace + tire_age × deg_slope + noise
-  • Dynamic dirty-air penalty scaled by gap (capped to prevent compounding)
+  • Dynamic dirty-air penalty scaled by gap AND overtaking difficulty
+  • Lap 1 Chaos: track-specific incident probabilities with position-dependent risk
+  • Battery depletion penalty (2026 regs): cars stuck behind lose extra time
   • N-stop pit-stop strategy with randomised windows
   • Stochastic DNF trigger per lap → produces bimodal finishing distributions
 """
@@ -24,17 +26,28 @@ def run_race_sim(
     pitstop_time_loss=22.0,
     season_trends=None,
     weather_context=None,
+    lap1_incident_rate=0.08,
+    overtaking_difficulty=0.40,
+    regulation_year=2026,
+    energy_recovery=0.55,
 ):
     """
     Fully-vectorised race simulation.
 
     Args:
-        race_stats:       dict[driver -> {compound -> {base_pace, deg_slope}}]
-        grid_positions:   dict[driver -> float]  (expected grid slot from quali)
-        num_iterations:   Monte Carlo iterations
-        num_laps:         total race laps
-        num_pitstops:     planned stops (1 / 2 / 3)
-        pitstop_time_loss: average pit-lane delta (seconds)
+        race_stats:           dict[driver -> {compound -> {base_pace, deg_slope}}]
+        reliability_stats:    dict[driver -> float] per-lap DNF probability
+        grid_positions:       dict[driver -> float] (expected grid slot from quali)
+        num_iterations:       Monte Carlo iterations
+        num_laps:             total race laps
+        num_pitstops:         planned stops (1 / 2 / 3)
+        pitstop_time_loss:    average pit-lane delta (seconds)
+        season_trends:        dict[driver -> {sunday_conversion, power_rank_delta}]
+        weather_context:      dict with track_temp, air_temp, rainfall
+        lap1_incident_rate:   float, track-specific Lap 1 incident probability
+        overtaking_difficulty: float 0.0-1.0, how hard it is to overtake
+        regulation_year:      int, determines if battery depletion applies (>=2026)
+        energy_recovery:      float 0.0-1.0, track energy recovery potential (braking zones)
 
     Returns:
         finishing_probabilities: dict[driver -> {Win, Podium, Top10, Finish, DNF}]
@@ -210,6 +223,51 @@ def run_race_sim(
     # DNF probability per lap (≈ 14 % retirement rate over 57 laps)
     DNF_PROB_PER_LAP = 0.003
 
+    # ── Overtaking difficulty parameters ──────────────────────────────
+    # Scale dirty-air penalty by track difficulty:
+    #   Easy track (0.2): multiplier = 0.3 + 0.2*0.5 = 0.40 (mild)
+    #   Hard track (0.9): multiplier = 0.3 + 0.9*0.5 = 0.75 (severe)
+    dirty_air_multiplier = 0.3 + (overtaking_difficulty * 0.5)
+
+    # Battery depletion tracking (2026+ regs only)
+    # Tracks how many consecutive laps each driver has been within DRS range
+    # of the car ahead. After 3+ laps attacking, extra time penalty accumulates.
+    apply_battery_depletion = (regulation_year >= 2026)
+    consecutive_close_laps = np.zeros((num_iterations, num_drivers), dtype=np.int32)
+
+    # ── LAP 1: TURN 1 CHAOS PHASE ────────────────────────────────────
+    #    Before the main loop, simulate Lap 1 incidents.
+    #    Position-dependent risk:
+    #      P1-P5:  60% of base rate (clear air, experienced front-runners)
+    #      P6-P15: 100% of base rate (midfield chaos zone)
+    #      P16-P20: 80% of base rate (back of pack, less density)
+    lap1_risk = np.zeros(num_drivers)
+    for i, d in enumerate(drivers):
+        gpos = int(grid_positions.get(d, 20))
+        if gpos <= 5:
+            lap1_risk[i] = lap1_incident_rate * 0.60
+        elif gpos <= 15:
+            lap1_risk[i] = lap1_incident_rate * 1.00
+        else:
+            lap1_risk[i] = lap1_incident_rate * 0.80
+
+    # Roll for Lap 1 incidents
+    lap1_rolls = np.random.random(size=(num_iterations, num_drivers))
+    lap1_incidents = lap1_rolls < lap1_risk  # (iters, D) bool
+
+    # For affected drivers: 20% chance of retirement, 80% chance of time penalty
+    lap1_severity = np.random.random(size=(num_iterations, num_drivers))
+    lap1_dnf = lap1_incidents & (lap1_severity < 0.20)
+    lap1_damage = lap1_incidents & (lap1_severity >= 0.20)
+
+    # Apply Lap 1 DNFs
+    active_mask &= ~lap1_dnf
+    total_race_time = np.where(active_mask, total_race_time, np.inf)
+
+    # Apply Lap 1 damage time penalties (3-15 seconds for contact/spins)
+    lap1_penalty = np.random.uniform(3.0, 15.0, size=(num_iterations, num_drivers))
+    total_race_time += np.where(lap1_damage & active_mask, lap1_penalty, 0.0)
+
     # ── Main lap loop ─────────────────────────────────────────────────
     for lap in range(1, num_laps + 1):
 
@@ -272,10 +330,12 @@ def run_race_sim(
         # Gap to the car directly ahead — fully NaN-free
         gaps = sorted_time[:, 1:] - sorted_time[:, :-1]
 
-        # Dynamic traffic penalty: up to 0.6 s if right on the gearbox
+        # ── Dirty air penalty scaled by overtaking difficulty ─────────
         dirty_air_mask = gaps < 2.0
         pen_sorted = np.zeros_like(total_race_time)
-        pen_sorted[:, 1:] = np.where(dirty_air_mask, (2.0 - gaps) * 0.3, 0.0)
+        pen_sorted[:, 1:] = np.where(dirty_air_mask, 
+                                      (2.0 - gaps) * dirty_air_multiplier, 
+                                      0.0)
 
         # Scatter penalties back to original driver order
         penalties = np.zeros_like(total_race_time)
@@ -283,6 +343,65 @@ def run_race_sim(
 
         # Apply penalties only to drivers still actively racing
         total_race_time += np.where(active_mask, penalties, 0.0)
+
+        # ── Battery Depletion & Superclipping (2026+ regulations) ──────
+        #    Two components under the 2026 regs:
+        #    
+        #    A) BASELINE SUPERCLIPPING: On low-recovery tracks (Monza, Spa),
+        #       EVERY car loses a small amount of time per lap because the
+        #       battery cannot fully recharge between straights. The MGU-K
+        #       clips out mid-straight, costing ~0.1-0.3s depending on track.
+        #       This is a fixed per-lap cost that affects ALL drivers.
+        #    
+        #    B) ATTACK DEPLETION: When a car is stuck within DRS range (<1.0s)
+        #       for 3+ consecutive laps, the constant battery deployment for
+        #       overtaking attempts drains it faster. On low-recovery tracks,
+        #       this is MUCH worse because there are fewer braking zones to
+        #       recharge between attacks.
+        if apply_battery_depletion:
+            # ── A) Baseline superclipping penalty ─────────────────────
+            # recovery_deficit measures how far below ideal recovery we are.
+            # At Monza (0.25): deficit = 0.75 → 0.75 * 0.04 = 0.030s/lap baseline loss
+            # At Bahrain (0.75): deficit = 0.25 → 0.25 * 0.04 = 0.010s/lap (manageable)
+            # At Monaco (0.85): deficit = 0.15 → 0.15 * 0.04 = 0.006s/lap (negligible)
+            recovery_deficit = 1.0 - energy_recovery
+            superclip_baseline = recovery_deficit * 0.04  # seconds per lap
+            total_race_time += np.where(active_mask, superclip_baseline, 0.0)
+            
+            # ── B) Attack depletion (DRS range following) ─────────────
+            # Check which drivers are within 1.0s of car ahead (DRS range)
+            drs_range_mask_sorted = np.zeros_like(total_race_time, dtype=bool)
+            drs_range_mask_sorted[:, 1:] = gaps < 1.0
+
+            # Scatter back to driver order
+            drs_close = np.zeros_like(total_race_time, dtype=bool)
+            np.put_along_axis(drs_close, sort_idx, drs_range_mask_sorted, axis=1)
+
+            # Update consecutive close lap counter
+            consecutive_close_laps = np.where(
+                drs_close & active_mask,
+                consecutive_close_laps + 1,
+                0  # Reset if no longer close
+            )
+
+            # Apply battery depletion after 3+ laps of attacking
+            # Base depletion scales with:
+            #   1. Overtaking difficulty (harder tracks = less deployment)
+            #   2. Energy recovery potential (low = much worse depletion)
+            #
+            # At Monza (OD=0.20, ER=0.25): 
+            #   depletion = 0.02 * (1.0 - 0.20*0.5) * (1.0 + (1-0.25)*0.6)
+            #             = 0.02 * 0.90 * 1.45 = 0.026s per attacking lap
+            # At Monaco (OD=0.95, ER=0.85): 
+            #   depletion = 0.02 * (1.0 - 0.95*0.5) * (1.0 + (1-0.85)*0.6)
+            #             = 0.02 * 0.525 * 1.09 = 0.011s per attacking lap
+            depletion_scale = (0.02 
+                              * (1.0 - overtaking_difficulty * 0.5)
+                              * (1.0 + recovery_deficit * 0.6))
+            battery_penalty_laps = np.maximum(consecutive_close_laps - 2, 0)
+            battery_time_loss = battery_penalty_laps * depletion_scale
+
+            total_race_time += np.where(active_mask, battery_time_loss, 0.0)
 
         # ── Stochastic DNF ────────────────────────────────────────────
         dnf_rolls = np.random.random(size=(num_iterations, num_drivers))

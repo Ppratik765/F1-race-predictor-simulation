@@ -141,6 +141,207 @@ def _track_similarity_weight(type_a, type_b):
         return 0.5
 
 
+# ── Regulation Eras ────────────────────────────────────────────────────────
+# Major regulation changes reset car performance hierarchies entirely.
+# Season trends must NEVER cross a regulation boundary.
+REGULATION_ERAS = {
+    (2022, 2025): 'GROUND_EFFECT_V1',   # 2022 ground-effect regulations
+    (2026, 2030): 'GROUND_EFFECT_V2',   # 2026 regs (battery, active aero)
+}
+
+def _get_regulation_era(year):
+    """Returns the regulation era string for a given year."""
+    for (start, end), era in REGULATION_ERAS.items():
+        if start <= year <= end:
+            return era
+    return 'UNKNOWN'
+
+def _is_same_regulation_era(year_a, year_b):
+    """Returns True if both years fall within the same regulation era."""
+    return _get_regulation_era(year_a) == _get_regulation_era(year_b)
+
+
+# ── Lap 1 Incident Rates (Track-Specific) ─────────────────────────────────
+# Historical probability that a driver is involved in a Lap 1 incident.
+# Based on multi-year F1 incident data patterns per circuit.
+LAP1_INCIDENT_RATES = {
+    # HIGH RISK — tight T1 + long run to T1
+    'Monza':       0.18,
+    'Italy':       0.18,
+    'Spa':         0.16,
+    'Belgium':     0.16,
+    'Baku':        0.14,
+    'Azerbaijan':  0.14,
+    'Las Vegas':   0.12,
+    # MEDIUM RISK
+    'Austria':     0.10,
+    'Bahrain':     0.10,
+    'Singapore':   0.10,
+    'Mexico':      0.10,
+    'Brazil':      0.10,
+    'São Paulo':   0.10,
+    'Abu Dhabi':   0.08,
+    'Yas Marina':  0.08,
+    'Spain':       0.08,
+    'Barcelona':   0.08,
+    'Silverstone': 0.08,
+    'Great Britain':0.08,
+    'Canada':      0.08,
+    'Canadian':    0.08,
+    'Montreal':    0.08,
+    'Qatar':       0.07,
+    'Lusail':      0.07,
+    'Japan':       0.07,
+    'Suzuka':      0.07,
+    'Imola':       0.08,
+    'Emilia Romagna':0.08,
+    'China':       0.09,
+    'Shanghai':    0.09,
+    'Saudi Arabia':0.10,
+    'Jeddah':      0.10,
+    # LOW RISK — wide T1 or short run
+    'Hungary':     0.06,
+    'Zandvoort':   0.05,
+    'Monaco':      0.04,
+    'Melbourne':   0.07,
+}
+
+def get_lap1_incident_rate(race_name):
+    """Resolve a race name to its Lap 1 incident probability. Default: 0.08."""
+    name = str(race_name)
+    for key, rate in LAP1_INCIDENT_RATES.items():
+        if key.lower() in name.lower():
+            return rate
+    return 0.08
+
+
+# ── Slipstream / Tow Effect for Qualifying ────────────────────────────────
+# (min_bonus_seconds, max_bonus_seconds) by track type
+SLIPSTREAM_EFFECT = {
+    'LOW_DF':  (0.15, 0.30),   # Monza, Spa, Baku — massive tow
+    'MEDIUM':  (0.05, 0.12),   # Austria, Silverstone — moderate
+    'HIGH_DF': (0.00, 0.03),   # Monaco, Hungary — negligible
+}
+
+def get_slipstream_range(track_type):
+    """Returns (min_bonus, max_bonus) for the given track type."""
+    return SLIPSTREAM_EFFECT.get(track_type, (0.05, 0.12))
+
+
+# ── Overtaking Difficulty Index ────────────────────────────────────────────
+# 0.0 = trivially easy to pass, 1.0 = nearly impossible.
+# Reflects track width, DRS zones, corner types, and historical overtake data.
+OVERTAKING_DIFFICULTY = {
+    # VERY HARD — narrow, few DRS opportunities
+    'Monaco':      0.95,
+    'Hungary':     0.75,
+    'Singapore':   0.70,
+    'Zandvoort':   0.70,
+    'Imola':       0.65,
+    'Emilia Romagna':0.65,
+    # MODERATE
+    'Spain':       0.50,
+    'Barcelona':   0.50,
+    'Silverstone': 0.45,
+    'Great Britain':0.45,
+    'Japan':       0.45,
+    'Suzuka':      0.45,
+    'Abu Dhabi':   0.40,
+    'Yas Marina':  0.40,
+    'Mexico':      0.40,
+    'Austria':     0.35,
+    'Bahrain':     0.30,
+    'Melbourne':   0.50,
+    'Qatar':       0.35,
+    'Lusail':      0.35,
+    'China':       0.35,
+    'Shanghai':    0.35,
+    'Saudi Arabia':0.30,
+    'Jeddah':      0.30,
+    # EASY — long straights, multiple DRS zones
+    'Baku':        0.20,
+    'Azerbaijan':  0.20,
+    'Monza':       0.20,
+    'Italy':       0.20,
+    'Spa':         0.25,
+    'Belgium':     0.25,
+    'Brazil':      0.25,
+    'São Paulo':   0.25,
+    'Las Vegas':   0.25,
+    'Canada':      0.30,
+    'Canadian':    0.30,
+    'Montreal':    0.30,
+}
+
+def get_overtaking_difficulty(race_name):
+    """Resolve a race name to its overtaking difficulty index. Default: 0.40."""
+    name = str(race_name)
+    for key, diff in OVERTAKING_DIFFICULTY.items():
+        if key.lower() in name.lower():
+            return diff
+    return 0.40
+
+
+# ── Energy Recovery Potential (2026 Regs — Superclipping Model) ────────────
+# Under the 2026 regulations, cars have a 350kW MGU-K but NO MGU-H (no turbo
+# energy recovery). Energy is harvested ONLY under braking.
+# 
+# Tracks with few heavy braking zones cannot fully recharge the battery,
+# causing "superclipping" — a sudden loss of ~150kW on long straights when
+# the battery runs empty. This is a massive lap-time penalty.
+#
+# Scale: 0.0 = almost no braking recovery (extreme superclip risk)
+#        1.0 = abundant heavy braking zones (battery always charged)
+ENERGY_RECOVERY_POTENTIAL = {
+    # VERY LOW RECOVERY — long straights, few/light braking zones
+    'Monza':        0.25,   # Only 2 real braking zones (T1, Ascari)
+    'Italy':        0.25,
+    'Spa':          0.35,   # La Source + Bus Stop, but Kemmel/Blanchimont are flat
+    'Belgium':      0.35,
+    'Las Vegas':    0.35,   # Long straights, light braking
+    'Silverstone':  0.40,   # Fast flowing, Stowe/Village are medium braking
+    'Great Britain':0.40,
+    'Baku':         0.40,   # Long main straight but T1, T3, T15 are heavy braking
+    'Azerbaijan':   0.40,
+    'Jeddah':       0.40,   # Fast flowing, limited heavy braking
+    'Saudi Arabia': 0.40,
+    # MODERATE RECOVERY
+    'Austria':      0.55,   # Short lap but T1/T3/T4 have decent braking
+    'Canada':       0.55,   # Hairpin + chicanes provide some recovery
+    'Canadian':     0.55,
+    'Montreal':     0.55,
+    'Japan':        0.55,   # Chicane + hairpin but much is high-speed
+    'Suzuka':       0.55,
+    'China':        0.55,
+    'Shanghai':     0.55,
+    'Brazil':       0.55,   # Descida do Lago + Juncão braking
+    'São Paulo':    0.55,
+    'Qatar':        0.50,
+    'Lusail':       0.50,
+    'Imola':        0.55,
+    'Emilia Romagna':0.55,
+    'Melbourne':    0.55,
+    'Spain':        0.60,
+    'Barcelona':    0.60,
+    'Zandvoort':    0.55,
+    # HIGH RECOVERY — many heavy braking zones
+    'Bahrain':      0.75,   # T1, T4, T8, T10, T14 — heavy braking everywhere
+    'Abu Dhabi':    0.70,   # Multiple chicanes + hairpins
+    'Yas Marina':   0.70,
+    'Mexico':       0.65,   # Hairpin + Esses braking
+    'Singapore':    0.80,   # 23 corners, many heavy braking zones (street circuit)
+    'Monaco':       0.85,   # Constant heavy braking (low speed, tight corners)
+    'Hungary':      0.75,   # Stop-start circuit, heavy braking T1, T2, T6
+}
+
+def get_energy_recovery_potential(race_name):
+    """Resolve a race name to its energy recovery potential (0-1). Default: 0.55."""
+    name = str(race_name)
+    for key, val in ENERGY_RECOVERY_POTENTIAL.items():
+        if key.lower() in name.lower():
+            return val
+    return 0.55
+
 # ── Season Trend Model ─────────────────────────────────────────────────────
 def extract_season_trends(year, current_race):
     """
@@ -162,6 +363,7 @@ def extract_season_trends(year, current_race):
     races_to_fetch = []
     r = current_round - 1
     y = year
+    current_era = _get_regulation_era(year)
     
     while len(races_to_fetch) < 5:
         if r > 0:
@@ -169,6 +371,9 @@ def extract_season_trends(year, current_race):
             r -= 1
         else:
             y -= 1
+            # REGULATION BOUNDARY: never cross into a different regulation era
+            if not _is_same_regulation_era(y, year):
+                break
             try:
                 prev_schedule = fastf1.get_event_schedule(y)
                 max_round = prev_schedule['RoundNumber'].max()
@@ -265,6 +470,92 @@ def extract_season_trends(year, current_race):
             }
             
     return season_trends
+
+
+# ── Qualifying Power Rank (Sandbagging Detector) ──────────────────────────
+def extract_quali_power_rank(year, current_race):
+    """
+    Extracts historical qualifying pace deltas from the last 5 qualifying
+    sessions within the SAME regulation era.
+    
+    Returns:
+        dict[driver] -> float (average qualifying delta-to-pole in seconds)
+        Lower = historically faster qualifier.
+    """
+    print("⏳ Extracting Qualifying Power Rank (Sandbagging Detection) …")
+    try:
+        current_event = fastf1.get_event(year, current_race)
+        current_round = current_event['RoundNumber']
+    except Exception:
+        return {}
+
+    races_to_fetch = []
+    r = current_round - 1
+    y = year
+
+    while len(races_to_fetch) < 5:
+        if r > 0:
+            races_to_fetch.append((y, r))
+            r -= 1
+        else:
+            y -= 1
+            # REGULATION BOUNDARY: never cross into a different regulation era
+            if not _is_same_regulation_era(y, year):
+                break
+            try:
+                prev_schedule = fastf1.get_event_schedule(y)
+                max_round = prev_schedule['RoundNumber'].max()
+                r = max_round
+            except Exception:
+                break
+
+    driver_deltas = {}  # driver -> [list of delta_to_pole values]
+
+    for (fetch_year, fetch_round) in races_to_fetch:
+        try:
+            q = fastf1.get_session(fetch_year, fetch_round, 'Q')
+            q.load(telemetry=False, weather=False, messages=False)
+
+            q_laps = q.laps
+            if q_laps is None or len(q_laps) == 0:
+                continue
+
+            drivers = pd.unique(q_laps['Driver'])
+            q_paces = {}
+
+            for drv in drivers:
+                drv_laps = q_laps[q_laps['Driver'] == drv]
+                fastest = drv_laps.pick_fastest()
+                if not pd.isnull(fastest['LapTime']):
+                    q_paces[drv] = fastest['LapTime'].total_seconds()
+
+            if not q_paces:
+                continue
+
+            pole_pace = min(q_paces.values())
+
+            for drv, pace in q_paces.items():
+                delta = pace - pole_pace
+                if drv not in driver_deltas:
+                    driver_deltas[drv] = []
+                driver_deltas[drv].append(delta)
+
+        except Exception:
+            continue
+
+    # Average the deltas
+    quali_power_rank = {}
+    for drv, deltas in driver_deltas.items():
+        if len(deltas) > 0:
+            quali_power_rank[drv] = float(np.mean(deltas))
+
+    if quali_power_rank:
+        print(f"  ✓ Quali power rank extracted for {len(quali_power_rank)} drivers "
+              f"({len(races_to_fetch)} races, era: {_get_regulation_era(year)})")
+    else:
+        print(f"  ℹ  No historical quali data in this regulation era yet")
+
+    return quali_power_rank
 
 
 # ── Lap filter ─────────────────────────────────────────────────────────────
