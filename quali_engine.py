@@ -8,43 +8,22 @@ Track evolution is modelled by assigning each driver a random run-order
 per iteration; later runners receive a multiplicative grip improvement
 of up to 1.5 % (configurable).
 
-Slipstream / tow effects are modelled per-track: at low-downforce circuits
-(Monza, Spa), randomly selected drivers receive a tow bonus each iteration.
-
-Historical Qualifying Power Rank (sandbagging correction) gently pulls
-drivers toward their true qualifying pace when FP3 telemetry is misleading.
-
 Outputs: expected grid positions and pole-position probability density.
 """
 
 import numpy as np
 
 
-# ── Slipstream ranges (imported from data_pipeline at call site) ──────────
-SLIPSTREAM_DEFAULTS = {
-    'LOW_DF':  (0.15, 0.30),
-    'MEDIUM':  (0.05, 0.12),
-    'HIGH_DF': (0.00, 0.03),
-}
-
-
-def run_quali_sim(
-    quali_stats,
-    num_iterations=100_000,
-    track_type='MEDIUM',
-    quali_power_rank=None,
-    season_trends=None,
-):
+def run_quali_sim(quali_stats, track_info=None, season_trends=None, num_iterations=100_000):
     """
     Vectorised qualifying simulation.
 
     Args:
-        quali_stats:       dict[driver] -> {S1_mean, S1_std, S2_mean, S2_std,
-                                            S3_mean, S3_std}
-        num_iterations:    number of Monte Carlo draws
-        track_type:        'HIGH_DF', 'MEDIUM', or 'LOW_DF' (for slipstream)
-        quali_power_rank:  dict[driver -> float] historical avg delta-to-pole
-        season_trends:     dict[driver -> {sunday_conversion, power_rank_delta}]
+        quali_stats: dict[driver] -> {S1_mean, S1_std, S2_mean, S2_std,
+                                       S3_mean, S3_std}
+        track_info: dict containing track characteristics like tow_factor
+        season_trends: dict containing quali_power_rank for sandbagging correction
+        num_iterations: number of Monte Carlo draws
 
     Returns:
         expected_grid:      dict[driver -> float]   (average grid slot)
@@ -66,29 +45,30 @@ def run_quali_sim(
     s3_means = np.array([quali_stats[d]['S3_mean'] for d in drivers])
     s3_stds  = np.array([quali_stats[d]['S3_std']  for d in drivers])
 
-    # ── Historical Qualifying Power Rank (Sandbagging Correction) ──────
-    #    If a driver's FP3 pace suggests P6 but their historical delta says
-    #    they're a P2 qualifier, gently correct their sector means.
-    #    Blend factor: 40% toward historical pace (conservative).
-    if quali_power_rank and len(quali_power_rank) > 0:
-        # Calculate each driver's FP3-derived total theoretical best
-        fp3_totals = s1_means + s2_means + s3_means
-        fp3_pole_time = np.min(fp3_totals)
-
+    # ── Sandbagging Correction (Qualifying Power Rank) ─────────────────
+    # If a driver's simulated pace is drastically slower than their historical quali power rank,
+    # apply a "Sandbagging Correction" to boost their simulated sectors, reflecting engine mode turn-ups.
+    sandbag_bonus = np.zeros(num_drivers)
+    if season_trends:
+        # Determine the fastest base pace in the field
+        field_base_paces = s1_means + s2_means + s3_means
+        pole_base_pace = np.min(field_base_paces) if len(field_base_paces) > 0 else 0
+        
         for i, d in enumerate(drivers):
-            if d in quali_power_rank:
-                fp3_delta = fp3_totals[i] - fp3_pole_time
-                hist_delta = quali_power_rank[d]
+            if d in season_trends and 'quali_power_rank' in season_trends[d]:
+                expected_delta = season_trends[d]['quali_power_rank']
+                actual_delta = field_base_paces[i] - pole_base_pace
+                
+                # If they are historically faster than their FP3 time suggests, give them a boost
+                if expected_delta < actual_delta - 0.1:
+                    # Boost by half the difference to be conservative
+                    boost = (actual_delta - expected_delta) * 0.5
+                    # Distribute boost across 3 sectors
+                    sandbag_bonus[i] = boost / 3.0
 
-                # Only correct if FP3 makes the driver look significantly slower
-                # than their historical qualifying pace (potential sandbagging)
-                if fp3_delta > hist_delta + 0.05:
-                    correction = (fp3_delta - hist_delta) * 0.4
-                    # Distribute correction proportionally across all 3 sectors
-                    total = s1_means[i] + s2_means[i] + s3_means[i]
-                    s1_means[i] -= correction * (s1_means[i] / total)
-                    s2_means[i] -= correction * (s2_means[i] / total)
-                    s3_means[i] -= correction * (s3_means[i] / total)
+    s1_means -= sandbag_bonus
+    s2_means -= sandbag_bonus
+    s3_means -= sandbag_bonus
 
     # ── Draw random sector times  (iterations × drivers) ──────────────
     s1 = np.random.normal(loc=s1_means, scale=s1_stds,
@@ -112,26 +92,20 @@ def run_quali_sim(
     track_evo = 1.0 - (run_order / max(num_drivers - 1, 1)) * max_improvement
     total_laps *= track_evo
 
-    # ── Slipstream / Tow Effect ────────────────────────────────────────
-    #   At low-downforce tracks, randomly 2-4 drivers "get a tow" per iteration.
-    #   They receive a time bonus drawn from the track-specific range.
-    tow_range = SLIPSTREAM_DEFAULTS.get(track_type, (0.05, 0.12))
-    tow_min, tow_max = tow_range
-
-    if tow_max > 0.01:  # Only apply if there's a meaningful tow effect
-        # Number of drivers getting a tow: 2-4
-        num_towed = min(4, max(2, num_drivers // 5))
-
-        # Create a tow mask: for each iteration, randomly select drivers
+    # ── Slipstream / Tow Factor ────────────────────────────────────────
+    # For each iteration, grant a random tow bonus to 3 drivers.
+    # This simulates the chaos of Q3 out-laps and slipstreaming.
+    if track_info and 'tow_factor' in track_info and track_info['tow_factor'] > 0:
+        tow_factor = track_info['tow_factor']
+        # Select 3 random drivers per iteration to get the tow
+        tow_recipients = np.argsort(np.random.random(size=(num_iterations, num_drivers)), axis=1)[:, :3]
+        
+        # Create a mask for those who get the tow
         tow_mask = np.zeros((num_iterations, num_drivers), dtype=bool)
-        for it in range(num_iterations):
-            tow_indices = np.random.choice(num_drivers, size=num_towed, replace=False)
-            tow_mask[it, tow_indices] = True
-
-        # Draw tow bonus values
-        tow_bonus = np.random.uniform(tow_min, tow_max,
-                                       size=(num_iterations, num_drivers))
-        total_laps -= np.where(tow_mask, tow_bonus, 0.0)
+        np.put_along_axis(tow_mask, tow_recipients, True, axis=1)
+        
+        # Apply the tow reduction
+        total_laps = np.where(tow_mask, total_laps - tow_factor, total_laps)
 
     # ── Rank drivers (lowest time = P1) ────────────────────────────────
     ranks = np.argsort(np.argsort(total_laps, axis=1), axis=1) + 1

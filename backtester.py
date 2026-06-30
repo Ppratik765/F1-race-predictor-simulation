@@ -26,12 +26,8 @@ from data_pipeline import (
     extract_real_grid,
     extract_reliability_stats,
     extract_season_trends,
-    extract_quali_power_rank,
     extract_team_mapping,
     extract_weather_context,
-    get_lap1_incident_rate,
-    get_overtaking_difficulty,
-    get_energy_recovery_potential,
     _get_track_type,
 )
 from quali_engine import run_quali_sim
@@ -219,20 +215,15 @@ def main(year=2025, race='Monza', num_iterations=200_000):
     race_stats  = extract_race_pace_and_deg(session_fp2)
     reliability_stats = extract_reliability_stats(year, race)
     season_trends = extract_season_trends(year, race)
-    quali_power_rank = extract_quali_power_rank(year, race)
     team_mapping = extract_team_mapping(session_fp2)
     weather_context = extract_weather_context(session_fp2)
-
-    # Track-specific parameters
+    
+    # Get track specifics (df_type, turn_1_chaos, tow_factor, overtaking_diff)
     try:
-        event = fastf1.get_event(year, race)
-        event_name = event.get('EventName', race)
+        event_info = fastf1.get_event(year, race)
+        track_info = _get_track_type(event_info['EventName'])
     except Exception:
-        event_name = race
-    track_type = _get_track_type(event_name)
-    lap1_incident_rate = get_lap1_incident_rate(event_name)
-    overtaking_difficulty = get_overtaking_difficulty(event_name)
-    energy_recovery = get_energy_recovery_potential(event_name)
+        track_info = None
 
     if not quali_stats or not race_stats:
         print("✗ Could not extract stats. Check session data.")
@@ -242,12 +233,6 @@ def main(year=2025, race='Monza', num_iterations=200_000):
     print(f"✓ Data ready in {t1 - t0:.1f} s")
     
     # Print weather conditions
-    # Print track parameters
-    print(f"\n   🏎️  Track Type: {track_type}")
-    print(f"   💥 Lap 1 Incident Rate: {lap1_incident_rate*100:.0f}%")
-    print(f"   🔄 Overtaking Difficulty: {overtaking_difficulty:.2f}")
-    print(f"   🔋 Energy Recovery: {energy_recovery:.2f}")
-
     if weather_context:
         rain_str = "WET" if weather_context.get('rainfall', False) else "DRY"
         print(f"\n   Weather: Track {weather_context['track_temp']:.0f} C | Air {weather_context['air_temp']:.0f} C | {rain_str}")
@@ -294,10 +279,7 @@ def main(year=2025, race='Monza', num_iterations=200_000):
         print("   ℹ  No qualifying results found — running Monte Carlo prediction")
         print(f"\n⏳ Qualifying sim ({num_iterations:,} iter) …")
         expected_grid, pole_probs, _, quali_drivers = run_quali_sim(
-            quali_stats, num_iterations,
-            track_type=track_type,
-            quali_power_rank=quali_power_rank,
-            season_trends=season_trends,
+            quali_stats, track_info, season_trends, num_iterations
         )
         grid_positions = expected_grid
         grid_source = "PREDICTED (Monte Carlo)"
@@ -335,10 +317,7 @@ def main(year=2025, race='Monza', num_iterations=200_000):
         pitstop_time_loss=22.0,
         season_trends=season_trends,
         weather_context=weather_context,
-        lap1_incident_rate=lap1_incident_rate,
-        overtaking_difficulty=overtaking_difficulty,
-        regulation_year=year,
-        energy_recovery=energy_recovery,
+        track_info=track_info,
     )
     t3 = time.time()
     print(f"✓ Race done in {t3 - t2:.1f} s")
