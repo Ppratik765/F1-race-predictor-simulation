@@ -204,8 +204,14 @@ def plot_grid_vs_finish(results_file, raw_data_file, prefix, year, race):
     net_change = {}
     
     for idx, driver in enumerate(drivers):
-        driver_ranks = np.where(active_mask[:, idx], ranks[:, idx], 20)
-        exp_finish = np.mean(driver_ranks)
+        # Only take ranks where the driver actually finished the race (active_mask is True)
+        finishing_ranks = ranks[active_mask[:, idx], idx]
+        
+        if len(finishing_ranks) > 0:
+            exp_finish = np.mean(finishing_ranks)
+        else:
+            exp_finish = 20 # Fallback
+            
         grid_pos = res_data['results'][driver].get('Grid_Position', 20)
         net_change[driver] = grid_pos - exp_finish  # Positive means gaining places
         
