@@ -163,7 +163,6 @@ def extract_season_trends(year, current_race):
     Historical races are weighted by track type similarity to the current race:
       Same type = 1.5x, Adjacent = 1.0x, Opposite = 0.5x.
     """
-    print("⏳ Extracting Season Trend Model (Historical 5-race momentum) …")
     try:
         current_event = fastf1.get_event(year, current_race)
         current_round = current_event['RoundNumber']

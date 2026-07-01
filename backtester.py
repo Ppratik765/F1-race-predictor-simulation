@@ -18,6 +18,32 @@ import datetime
 import argparse
 import numpy as np
 import fastf1
+fastf1.set_log_level('ERROR')
+import threading
+import itertools
+
+class Spinner:
+    def __init__(self, message="Fetching data..."):
+        self.message = message
+        self.spinner = itertools.cycle(['|', '/', '-', '\\'])
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._spin)
+
+    def _spin(self):
+        while not self.stop_event.is_set():
+            sys.stdout.write(f"\r{self.message} {next(self.spinner)}")
+            sys.stdout.flush()
+            time.sleep(0.1)
+
+    def __enter__(self):
+        self.thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop_event.set()
+        self.thread.join()
+        sys.stdout.write(f"\r✓ {self.message} Done!{' ' * 20}\n")
+        sys.stdout.flush()
 
 from data_pipeline import (
     get_session,
@@ -178,59 +204,52 @@ def main(year=2025, race='Monza', num_iterations=200_000):
             return
 
     # ── Step 1: Load practice data (FP2 for race pace, FP3 for quali) ─
-    print("\n⏳ Loading telemetry via FastF1 …")
+    t0 = time.time()
+    with Spinner("Fetching data..."):
+        session_fp2 = _try_load_session(year, race, 'FP2')
+        session_fp3 = _try_load_session(year, race, 'FP3')
 
-    session_fp2 = _try_load_session(year, race, 'FP2')
-    session_fp3 = _try_load_session(year, race, 'FP3')
+        # Fallback: if FP3 doesn't exist (sprint weekend), try Sprint Qualifying
+        if session_fp3 is None:
+            session_fp3 = _try_load_session(year, race, 'SQ')
+        if session_fp3 is None:
+            session_fp3 = _try_load_session(year, race, 'FP1')
 
-    # Fallback: if FP3 doesn't exist (sprint weekend), try Sprint Qualifying
-    if session_fp3 is None:
-        print("   ℹ  FP3 not found — trying Sprint Qualifying …")
-        session_fp3 = _try_load_session(year, race, 'SQ')
-    if session_fp3 is None:
-        print("   ℹ  Sprint Qualifying not found — trying FP1 …")
-        session_fp3 = _try_load_session(year, race, 'FP1')
+        if session_fp2 is None:
+            session_fp2 = _try_load_session(year, race, 'S')
+        if session_fp2 is None:
+            session_fp2 = _try_load_session(year, race, 'FP1')
 
-    if session_fp2 is None:
-        print("   ℹ  FP2 not found — trying Sprint Race for long-run pace …")
-        session_fp2 = _try_load_session(year, race, 'S')
-    if session_fp2 is None:
-        print("   ℹ  Sprint Race not found — trying FP1 …")
-        session_fp2 = _try_load_session(year, race, 'FP1')
+        if session_fp2 is None:
+            print("\n✗ No race-pace representative session found (FP2/S/FP1).")
+            print("  Hint: Data may not yet be uploaded for this weekend.")
+            return
 
-    if session_fp2 is None:
-        print("✗ No race-pace representative session found (FP2/S/FP1).")
-        print("  Hint: Data may not yet be uploaded for this weekend.")
-        print("  Try again closer to the race weekend (typically Friday afternoon onwards).")
-        return
+        if session_fp3 is None:
+            print("\n✗ No qualifying-representative session found (FP3/SQ/FP1).")
+            print("  Hint: Data may not yet be uploaded for this weekend.")
+            return
 
-    if session_fp3 is None:
-        print("✗ No qualifying-representative session found (FP3/SQ/FP1).")
-        print("  Hint: Data may not yet be uploaded for this weekend.")
-        print("  Try again closer to the race weekend (typically Saturday afternoon onwards).")
-        return
-
-    print("⏳ Extracting driver statistics …")
-    quali_stats = extract_quali_stats(session_fp3)
-    race_stats  = extract_race_pace_and_deg(session_fp2)
-    reliability_stats = extract_reliability_stats(year, race)
-    season_trends = extract_season_trends(year, race)
-    team_mapping = extract_team_mapping(session_fp2)
-    weather_context = extract_weather_context(session_fp2)
-    
-    # Get track specifics (df_type, turn_1_chaos, tow_factor, overtaking_diff)
-    try:
-        event_info = fastf1.get_event(year, race)
-        track_info = _get_track_type(event_info['EventName'])
-    except Exception:
-        track_info = None
+        quali_stats = extract_quali_stats(session_fp3)
+        race_stats  = extract_race_pace_and_deg(session_fp2)
+        reliability_stats = extract_reliability_stats(year, race)
+        season_trends = extract_season_trends(year, race)
+        team_mapping = extract_team_mapping(session_fp2)
+        weather_context = extract_weather_context(session_fp2)
+        
+        # Get track specifics (df_type, turn_1_chaos, tow_factor, overtaking_diff)
+        try:
+            event_info = fastf1.get_event(year, race)
+            track_info = _get_track_type(event_info['EventName'])
+        except Exception:
+            track_info = None
 
     if not quali_stats or not race_stats:
         print("✗ Could not extract stats. Check session data.")
         return
 
     t1 = time.time()
-    print(f"✓ Data ready in {t1 - t0:.1f} s")
+    print(f"Data ready in {t1 - t0:.1f} s")
     
     # Print weather conditions
     if weather_context:
@@ -254,15 +273,15 @@ def main(year=2025, race='Monza', num_iterations=200_000):
     grid_source = "SIMULATED"
 
     # Try loading actual Qualifying results
-    print("\n⏳ Checking for real Qualifying results …")
-    quali_session = _try_load_session(year, race, 'Q')
-    if quali_session is not None:
-        real_grid = extract_real_grid(quali_session)
+    with Spinner("Fetching real quali..."):
+        quali_session = _try_load_session(year, race, 'Q')
+        if quali_session is not None:
+            real_grid = extract_real_grid(quali_session)
 
     if real_grid is not None:
         grid_source = "ACTUAL (from Qualifying)"
         grid_positions = {d: float(p) for d, p in real_grid.items()}
-        print(f"✓ Using REAL qualifying grid ({len(real_grid)} drivers)")
+        print(f"Fetched real quali! ({len(real_grid)} drivers)")
 
         # Print actual grid
         grid_rows = sorted(real_grid.items(), key=lambda x: x[1])
@@ -276,8 +295,7 @@ def main(year=2025, race='Monza', num_iterations=200_000):
         )
     else:
         # No real qualifying → run simulation
-        print("   ℹ  No qualifying results found — running Monte Carlo prediction")
-        print(f"\n⏳ Qualifying sim ({num_iterations:,} iter) …")
+        print("Doing quali simulation...")
         expected_grid, pole_probs, _, quali_drivers = run_quali_sim(
             quali_stats, track_info, season_trends, num_iterations
         )
@@ -302,7 +320,7 @@ def main(year=2025, race='Monza', num_iterations=200_000):
     # ── Step 3: Race simulation ───────────────────────────────────────
     num_laps = 57
     t2 = time.time()
-    print(f"\n⏳ Race sim ({num_iterations:,} iter, {num_laps} laps) …")
+    print("Doing race simulation...")
 
     # Ensure grid_positions only includes drivers we have race pace for
     sim_grid = {d: grid_positions.get(d, 20) for d in race_stats.keys()}
@@ -396,12 +414,18 @@ def main(year=2025, race='Monza', num_iterations=200_000):
     print(f"\n💾 JSON saved → {output_file}")
     print(f"⏱  Total wall time: {t4 - t0:.1f} s")
 
+    choice = input("\nRun visualizer to generate charts? (y/n): ").strip().lower()
+    if choice == 'y':
+        import subprocess
+        print("Generating visualizations...")
+        subprocess.run([sys.executable, "visualizer.py", "--year", str(year), "--race", race])
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="F1 Monte Carlo Backtester")
-    parser.add_argument('--year', type=int, default=2026, help='Year of the race')
-    parser.add_argument('--race', type=str, default='Austria', help='Name of the race')
-    parser.add_argument('--iterations', type=int, default=50000, help='Number of Monte Carlo iterations')
-    args = parser.parse_args()
+    parser = argparse.ArgumentParser(description="F1 Race Predictor (Monte Carlo)")
+    parser.add_argument("--year", type=int, default=2025, help="Season year (e.g. 2024, 2025, 2026)")
+    parser.add_argument("--race", type=str, default="Monza", help="Race location or name (e.g. Monza, Bahrain)")
+    parser.add_argument("--iterations", type=int, default=10_000, help="Number of simulation iterations")
     
+    args = parser.parse_args()
     main(year=args.year, race=args.race, num_iterations=args.iterations)
