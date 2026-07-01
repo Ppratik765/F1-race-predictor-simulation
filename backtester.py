@@ -18,6 +18,8 @@ import datetime
 import argparse
 import numpy as np
 import fastf1
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
 fastf1.set_log_level('ERROR')
 import threading
 import itertools
