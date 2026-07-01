@@ -178,7 +178,7 @@ def _try_load_session(year, race, session_type):
 
 # -- Main ------------------------------------------------------------------
 
-def main(year=2025, race='Monza', num_iterations=200_000):
+def main(year=2025, race='Monza', num_iterations=50_000):
     import pandas as pd  # local import for Timestamp usage
 
     print(f"\n{'-' * 60}")
@@ -425,7 +425,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="F1 Race Predictor (Monte Carlo)")
     parser.add_argument("--year", type=int, default=2025, help="Season year (e.g. 2024, 2025, 2026)")
     parser.add_argument("--race", type=str, default="Monza", help="Race location or name (e.g. Monza, Bahrain)")
-    parser.add_argument("--iterations", type=int, default=10_000, help="Number of simulation iterations")
+    parser.add_argument("--iterations", type=int, default=50_000, help="Number of simulation iterations")
     
     args = parser.parse_args()
     main(year=args.year, race=args.race, num_iterations=args.iterations)
