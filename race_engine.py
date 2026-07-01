@@ -79,35 +79,32 @@ def run_race_sim(
             base_pace[i, cidx] = cstats['base_pace']
             deg_slope[i, cidx] = cstats['deg_slope']
 
-    # ── Qualifying Pace Anchor ─────────────────────────────────────────
-    # Free Practice 2 lap times are notoriously distorted by unknown fuel loads.
-    # To prevent backmarkers (who ran low-fuel FP2 sims) from beating Pole sitters, 
-    # we anchor the extracted base pace using their true qualifying hierarchy.
-    # 1 grid drop ≈ +0.12s lap time penalty in expected race pace.
-    if grid_positions:
-        pole_driver = min(grid_positions, key=grid_positions.get)
-        if pole_driver in drivers:
-            pole_idx = drivers.index(pole_driver)
-            pole_pace = base_pace[pole_idx].copy()
+    # ── Race Pace Anchor & Power Rank Correction ───────────────────────
+    # Free Practice lap times can be heavily distorted by fuel loads or 
+    # interrupted by red flags/engine issues (like VER in Austria).
+    # We anchor the extracted base pace using their Historical Power Rank.
+    benchmark_pace = np.min(base_pace, axis=0)
+            
+    for i, d in enumerate(drivers):
+        if season_trends and d in season_trends:
+            # Expected pace based on last 5 races
+            power_rank_delta = season_trends[d].get('power_rank_delta', 1.5)
+            sunday_conv = season_trends[d].get('sunday_conversion', 0.0)
+            expected_pace = benchmark_pace + power_rank_delta - sunday_conv
         else:
-            pole_pace = np.min(base_pace, axis=0)
-            
-        for i, d in enumerate(drivers):
+            # Fallback to qualifying grid position if no historical data
             grid_pos = grid_positions.get(d, 20)
-            # Calculate what this driver's pace *should* be based on qualifying
-            expected_pace = pole_pace + ((grid_pos - 1) * 0.12)
+            expected_pace = benchmark_pace + ((grid_pos - 1) * 0.12)
             
-            # Apply Season Trend Modifier
-            if season_trends and d in season_trends:
-                sunday_conv = season_trends[d].get('sunday_conversion', 0.0)
-                sunday_bonus = np.clip(sunday_conv, -0.4, 0.4)
-                expected_pace -= sunday_bonus
-            
-            # Apply bidirectional clamping:
-            # - A backmarker cannot magically be more than 0.2s faster than their expected grid pace
-            # - A front-runner cannot be severely punished (max +0.5s) if they ran heavy fuel in FP2
-            base_pace[i] = np.maximum(base_pace[i], expected_pace - 0.2)
-            base_pace[i] = np.minimum(base_pace[i], expected_pace + 0.5)
+        for cidx in range(3):
+            # If their FP pace is monstrously slow (> 1.2s off expected), it means 
+            # they didn't do a representative long run (traffic, issues). Trust history.
+            if base_pace[i, cidx] > expected_pace[cidx] + 1.2:
+                base_pace[i, cidx] = expected_pace[cidx] + 0.1 # Slight penalty for missing FP run
+            else:
+                # Clamp: max 0.4s faster than history (upgrades), max 0.5s slower (setup issues)
+                base_pace[i, cidx] = max(base_pace[i, cidx], expected_pace[cidx] - 0.4)
+                base_pace[i, cidx] = min(base_pace[i, cidx], expected_pace[cidx] + 0.5)
 
     # ── Generic Degradation Anchor ─────────────────────────────────────────────
     # Short 3-lap practice stints often produce flat or negative slopes, 
