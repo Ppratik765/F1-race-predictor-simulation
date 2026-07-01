@@ -59,7 +59,7 @@ def add_watermark(fig, year, race):
     
     # Add circular image
     try:
-        img_path = r"C:\Users\ppmak\.gemini\antigravity-ide\brain\562f5954-531d-4f53-94aa-b5c965efc8d3\media__1782760359196.png"
+        img_path = 'watermark.png'
         if os.path.exists(img_path):
             img = mpimg.imread(img_path)
             
