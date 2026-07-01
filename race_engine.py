@@ -95,8 +95,9 @@ def run_race_sim(
             expected_pace = pole_pace + ((grid_pos - 1) * 0.12)
             
             # Apply upper clamping:
-            # - A front-runner cannot be severely punished (max +0.15s) if they ran heavy fuel in FP2 or had no data
-            base_pace[i] = np.minimum(base_pace[i], expected_pace + 0.15)
+            # - If a driver ran heavy fuel or skipped long runs in FP2, their raw pace will be terrible.
+            #   We clamp them to their expected grid pace so they aren't unfairly penalized for bad practice data.
+            base_pace[i] = np.minimum(base_pace[i], expected_pace)
             
             # Apply Season Trend Modifier directly to final base pace (Max +/- 0.1s to respect current weekend form)
             if season_trends and d in season_trends:
