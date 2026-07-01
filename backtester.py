@@ -318,6 +318,7 @@ def main(year=2025, race='Monza', num_iterations=200_000):
         season_trends=season_trends,
         weather_context=weather_context,
         track_info=track_info,
+        year=year,
     )
     t3 = time.time()
     print(f"✓ Race done in {t3 - t2:.1f} s")

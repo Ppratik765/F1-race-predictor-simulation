@@ -25,6 +25,7 @@ def run_race_sim(
     season_trends=None,
     weather_context=None,
     track_info=None,
+    year=None,
 ):
     """
     Fully-vectorised race simulation.
@@ -97,7 +98,8 @@ def run_race_sim(
             # Apply upper clamping:
             # - If a driver ran heavy fuel or skipped long runs in FP2, their raw pace will be terrible.
             #   We clamp them to their expected grid pace so they aren't unfairly penalized for bad practice data.
-            base_pace[i] = np.minimum(base_pace[i], expected_pace)
+            #   We add a tiny +0.05s penalty to ensure pole sitters aren't given *perfect* grace if they lacked data.
+            base_pace[i] = np.minimum(base_pace[i], expected_pace + 0.05)
             
             # Apply Season Trend Modifier directly to final base pace (Max +/- 0.1s to respect current weekend form)
             if season_trends and d in season_trends:
@@ -293,6 +295,21 @@ def run_race_sim(
         # Combine dirty air and DRS. Add a tiny stochastic element so cars don't indefinitely swap
         stochastic_pass = np.random.normal(1.0, 0.1, size=gaps.shape)
         pen_sorted[:, 1:] = (dirty_pen + drs_bonus) * stochastic_pass
+
+        # ── 2026 Battery Superclipping ──
+        # High 'tow_factor' means long straights -> massive battery drain (superclipping).
+        # Cars in clean air (leader, or gaps > 1.2s) suffer severe pace loss, while 
+        # followers save battery in the slipstream.
+        if year is not None and int(year) >= 2026:
+            base_superclip = track_info.get('tow_factor', 0.15) if track_info else 0.15
+            superclip_penalty = base_superclip * 0.8  # Up to +0.24s penalty per lap for clean air
+            
+            # Leader (index 0) is always in clean air
+            pen_sorted[:, 0] += superclip_penalty
+            
+            # Other cars are in clean air if gap > 1.2s
+            clean_air_mask = gaps > 1.2
+            pen_sorted[:, 1:] += np.where(clean_air_mask, superclip_penalty, 0.0)
 
         # Scatter penalties back to original driver order
         penalties = np.zeros_like(total_race_time)
