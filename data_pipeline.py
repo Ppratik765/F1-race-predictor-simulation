@@ -329,7 +329,7 @@ def extract_quali_stats(session):
     quali_stats = {}
 
     for driver in drivers:
-        driver_laps = filtered_laps.pick_driver(driver)
+        driver_laps = filtered_laps.pick_drivers(driver)
         driver_laps = driver_laps.dropna(
             subset=['Sector1Time', 'Sector2Time', 'Sector3Time', 'LapTime']
         )
