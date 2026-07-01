@@ -300,7 +300,8 @@ def main(year=2025, race='Monza', num_iterations=50_000):
     t2 = time.time()
     
     # Ensure grid_positions only includes drivers we have race pace for
-    sim_grid = {d: grid_positions.get(d, 20) for d in race_stats.keys()}
+    num_drivers = len(race_stats.keys())
+    sim_grid = {d: grid_positions.get(d, num_drivers) for d in race_stats.keys()}
 
     with Spinner("Doing race simulation..."):
         finishing_probs, final_ranks, race_drivers, active_mask = run_race_sim(
@@ -356,7 +357,7 @@ def main(year=2025, race='Monza', num_iterations=50_000):
 
     for driver in race_drivers:
         driver_data = {
-            'Grid_Position': sim_grid.get(driver, 20),
+            'Grid_Position': sim_grid.get(driver, len(race_drivers)),
             'Race': {
                 'Win':    round(finishing_probs[driver]['Win'],    4),
                 'Podium': round(finishing_probs[driver]['Podium'], 4),

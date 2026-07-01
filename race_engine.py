@@ -91,7 +91,7 @@ def run_race_sim(
         pole_pace = np.min(base_pace, axis=0)
             
         for i, d in enumerate(drivers):
-            grid_pos = grid_positions.get(d, 20)
+            grid_pos = grid_positions.get(d, len(drivers))
             # Calculate what this driver's pace *should* be based on qualifying
             expected_pace = pole_pace + ((grid_pos - 1) * 0.12)
             
@@ -129,7 +129,7 @@ def run_race_sim(
             median_field_deg = np.median(deg_slope[:, cidx])
             
             for i, d in enumerate(drivers):
-                grid_pos = grid_positions.get(d, 20)
+                grid_pos = grid_positions.get(d, len(drivers))
                 # Front runners expect better deg, backmarkers expect worse (+0.003s/lap per grid drop)
                 expected_deg = median_field_deg + ((grid_pos - 10) * 0.003)
                 
@@ -187,7 +187,7 @@ def run_race_sim(
             pitstop_lap_arrays.append(p_laps)
 
     # ── State tensors ─────────────────────────────────────────────────
-    grid_offsets = np.array([grid_positions.get(d, 20) for d in drivers])
+    grid_offsets = np.array([grid_positions.get(d, len(drivers)) for d in drivers])
     # Initial grid spacing: ~0.4s per grid slot to prevent instant mega-DRS trains
     total_race_time = np.tile(grid_offsets * 0.4,
                               (num_iterations, 1))  # (iters, drivers)

@@ -1,5 +1,7 @@
 import json
 import matplotlib.pyplot as plt
+import warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='matplotlib')
 import seaborn as sns
 import numpy as np
 import os
@@ -75,6 +77,18 @@ def add_watermark(fig, year, race):
     except Exception as e:
         print(f"Watermark image error: {e}")
 
+def add_logo(fig):
+    try:
+        img_path = 'racing-car.png'
+        if os.path.exists(img_path):
+            img = mpimg.imread(img_path)
+            ax_logo = fig.add_axes([0.01, 0.94, 0.05, 0.05], zorder=1)
+            ax_logo.axis('off')
+            ax_logo.imshow(img)
+            ax_logo.set_in_layout(False)
+    except Exception as e:
+        print(f"Logo image error: {e}")
+
 # ── Chart 1: The Championship Contenders (Win, Podium & Points) ──────────────
 def plot_win_probabilities(results_file, prefix, year, race):
     with open(results_file, 'r') as f:
@@ -83,61 +97,100 @@ def plot_win_probabilities(results_file, prefix, year, race):
     results = data['results']
     drivers = list(results.keys())
     
-    # Calculate probabilities for the 3 tiers
+    # Calculate probabilities for the 5 tiers (0-100 scale)
     wins = {d: results[d]['Race']['Win'] * 100 for d in drivers}
     podiums = {d: (results[d]['Race']['Podium'] - results[d]['Race']['Win']) * 100 for d in drivers}
     points = {d: (results[d]['Race']['Top10'] - results[d]['Race']['Podium']) * 100 for d in drivers}
+    finishes = {d: max(0, 1.0 - results[d]['Race']['DNF'] - results[d]['Race']['Top10']) * 100 for d in drivers}
+    dnfs = {d: results[d]['Race']['DNF'] * 100 for d in drivers}
     
-    # FILTER: Show drivers with > 5% chance of scoring points to keep it relevant but not too sparse
-    contenders = [d for d in drivers if (wins[d] + podiums[d] + points[d]) > 5.0]
+    # Sort by Win %, then Podium %, then Points % (descending)
+    sorted_drivers = sorted(drivers, key=lambda d: (wins[d], podiums[d], points[d]), reverse=True)
     
-    if not contenders:
-        contenders = sorted(drivers, key=lambda d: wins[d] + podiums[d] + points[d], reverse=True)[:10]
+    # FILTER: Show drivers with > 5% chance of scoring points
+    top_contenders = [d for d in sorted_drivers if (wins[d] + podiums[d] + points[d]) > 5.0]
+    
+    if not top_contenders:
+        top_contenders = sorted_drivers[:10]
         
-    # Sort by win chance, then podium chance, then points chance
-    sorted_contenders = sorted(contenders, key=lambda d: (wins[d], podiums[d], points[d]))
+    # Reverse so P1 is at the top of the chart (since it draws bottom-up)
+    top_contenders.reverse()
     
-    w_vals = [wins[d] for d in sorted_contenders]
-    p_vals = [podiums[d] for d in sorted_contenders]
-    pts_vals = [points[d] for d in sorted_contenders]
+    w_vals = [wins[d] for d in top_contenders]
+    p_vals = [podiums[d] for d in top_contenders]
+    pts_vals = [points[d] for d in top_contenders]
+    fin_vals = [finishes[d] for d in top_contenders]
+    dnf_vals = [dnfs[d] for d in top_contenders]
     
-    fig, ax = plt.subplots(figsize=(10, max(5, len(sorted_contenders) * 0.6)))
-    y = np.arange(len(sorted_contenders))
+    fig, ax = plt.subplots(figsize=(10, max(6, len(top_contenders) * 0.6)))
+    y = np.arange(len(top_contenders))
     
-    # Use gold for wins, a soft grey for podiums, and a lighter blue/grey for points
-    bars_w = ax.barh(y, w_vals, color='#FFC107', height=0.6, label='Win Probability')
-    bars_p = ax.barh(y, p_vals, left=w_vals, color='#E0E0E0', height=0.6, label='Podium (P2-P3)')
-    
+    # 100% Stacking logic
+    left_p = w_vals
     left_pts = [w + p for w, p in zip(w_vals, p_vals)]
-    bars_pts = ax.barh(y, pts_vals, left=left_pts, color='#BBDEFB', height=0.6, label='Points (P4-P10)')
+    left_fin = [w + p + pt for w, p, pt in zip(w_vals, p_vals, pts_vals)]
+    left_dnf = [w + p + pt + f for w, p, pt, f in zip(w_vals, p_vals, pts_vals, fin_vals)]
+    
+    # Plot bars with specified color palette
+    ax.barh(y, w_vals, color='#FFC107', height=0.6, label='Win')
+    ax.barh(y, p_vals, left=left_p, color='#CBD5E1', height=0.6, label='Podium (P2-P3)')
+    ax.barh(y, pts_vals, left=left_pts, color='#90CAF9', height=0.6, label='Points (P4-P10)')
+    ax.barh(y, fin_vals, left=left_fin, color='#475569', height=0.6, label='Finish (>P10)')
+    ax.barh(y, dnf_vals, left=left_dnf, color='#E53E3E', height=0.6, label='DNF')
     
     ax.set_yticks(y)
-    ax.set_yticklabels(sorted_contenders, fontweight='bold', fontsize=11)
+    ax.set_yticklabels(top_contenders, fontweight='bold', fontsize=11)
     
     # Dynamic tick colors based on team
     for tick_label in ax.get_yticklabels():
         tick_label.set_color(get_color(tick_label.get_text()))
         
-    # Clean data labels
-    for i, (w, p, pts) in enumerate(zip(w_vals, p_vals, pts_vals)):
-        # Win label
-        if w > 2.0:
-            ax.text(w/2, i, f"{w:.0f}%", va='center', ha='center', color='white', fontweight='bold', fontsize=9)
-        # Podium label
-        if p > 3.0:
-            ax.text(w + p/2, i, f"{p:.0f}%", va='center', ha='center', color='#555555', fontsize=9)
-        # Points label
-        if pts > 4.0:
-            ax.text(w + p + pts/2, i, f"{pts:.0f}%", va='center', ha='center', color='#1565C0', fontsize=9)
+    # Mobile-Crisp Text Logic
+    for i in range(len(top_contenders)):
+        w = w_vals[i]
+        p = p_vals[i]
+        pts = pts_vals[i]
+        fin = fin_vals[i]
+        dnf = dnf_vals[i]
+        
+        # Centers for text placement
+        w_center = w / 2
+        p_center = w + p / 2
+        pts_center = w + p + pts / 2
+        fin_center = w + p + pts + fin / 2
+        dnf_center = w + p + pts + fin + dnf / 2
+        
+        # Helper to conditionally draw text based on 4% threshold
+        def draw_text(val, x_center, color):
+            if val >= 4.0:
+                ax.text(x_center, i, f"{val:.0f}%", va='center', ha='center', 
+                        color=color, fontweight='bold', fontsize=10)
+                
+        # Dark Slate / Black for lighter bars
+        draw_text(w, w_center, '#1E293B')
+        draw_text(p, p_center, '#1E293B')
+        draw_text(pts, pts_center, '#1E293B')
+        
+        # White for darker bars
+        draw_text(fin, fin_center, 'white')
+        draw_text(dnf, dnf_center, 'white')
             
     ax.set_xlabel('Probability (%)', fontsize=10, color='#666')
-    ax.set_title(f'The Battle for Glory\nWin, Podium & Points Probabilities', fontsize=16, fontweight='bold', pad=20, loc='left')
-    ax.legend(loc='lower right', frameon=False)
+    ax.set_xlim(0, 100)
+    ax.set_title('The Battle for Glory\nRace Outcome Probabilities', fontsize=16, fontweight='bold', pad=35, loc='left')
+    
+    # Legend update for all 5 categories, placed below to keep aspect ratio mobile-friendly
+    ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), ncol=3, frameon=False, fontsize=10)
+    
     ax.grid(axis='x', linestyle='--', alpha=0.7)
-    ax.spines['left'].set_visible(False)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.spines['bottom'].set_visible(True)
     
     add_watermark(fig, year, race)
+    add_logo(fig)
     plt.tight_layout()
+    # High-Fidelity Export
     plt.savefig(f"{prefix}_win_probabilities.png", dpi=300, bbox_inches='tight')
     plt.close()
 
@@ -157,7 +210,7 @@ def plot_expected_points(results_file, raw_data_file, prefix, year, race):
     
     expected_points = {}
     for idx, driver in enumerate(drivers):
-        driver_ranks = np.where(active_mask[:, idx], ranks[:, idx], 20)
+        driver_ranks = np.where(active_mask[:, idx], ranks[:, idx], len(drivers))
         pts = np.array([points_system.get(r, 0) for r in driver_ranks])
         expected_points[driver] = np.mean(pts)
         
@@ -181,11 +234,12 @@ def plot_expected_points(results_file, raw_data_file, prefix, year, race):
         ax.text(pt + 0.3, i, f"{pt:.1f} pts", va='center', color='#333333', fontweight='bold')
             
     ax.set_xlabel('Expected Championship Points', fontsize=10, color='#666')
-    ax.set_title(f'The Points Battle\nTop 10 Expected Scorers', fontsize=16, fontweight='bold', pad=20, loc='left')
+    ax.set_title(f'The Points Battle\nTop 10 Expected Scorers', fontsize=16, fontweight='bold', pad=35, loc='left')
     ax.spines['left'].set_visible(False)
     ax.grid(axis='x', linestyle='--', alpha=0.7)
     
     add_watermark(fig, year, race)
+    add_logo(fig)
     plt.tight_layout()
     plt.savefig(f"{prefix}_expected_points.png", dpi=300, bbox_inches='tight')
     plt.close()
@@ -210,9 +264,9 @@ def plot_grid_vs_finish(results_file, raw_data_file, prefix, year, race):
         if len(finishing_ranks) > 0:
             exp_finish = np.mean(finishing_ranks)
         else:
-            exp_finish = 20 # Fallback
+            exp_finish = len(drivers) # Fallback
             
-        grid_pos = res_data['results'][driver].get('Grid_Position', 20)
+        grid_pos = res_data['results'][driver].get('Grid_Position', len(drivers))
         net_change[driver] = grid_pos - exp_finish  # Positive means gaining places
         
     # Sort by net change (biggest losers at top, biggest gainers at bottom)
@@ -242,7 +296,7 @@ def plot_grid_vs_finish(results_file, raw_data_file, prefix, year, race):
             ax.text(c - 0.1, i, f"{c:.1f}", va='center', ha='right', color='#C62828', fontweight='bold', fontsize=9)
             
     ax.set_xlabel('Expected Positions Gained / Lost vs. Grid', fontsize=10, color='#666')
-    ax.set_title(f'The Chargers & The Fallers\nExpected Position Changes', fontsize=16, fontweight='bold', pad=20, loc='left')
+    ax.set_title(f'The Chargers & The Fallers\nExpected Position Changes', fontsize=16, fontweight='bold', pad=35, loc='left')
     
     # Hide all spines except bottom
     for spine in ax.spines.values():
@@ -251,6 +305,7 @@ def plot_grid_vs_finish(results_file, raw_data_file, prefix, year, race):
     ax.grid(axis='x', linestyle='--', alpha=0.5)
     
     add_watermark(fig, year, race)
+    add_logo(fig)
     plt.tight_layout()
     plt.savefig(f"{prefix}_net_position_change.png", dpi=300, bbox_inches='tight')
     plt.close()
@@ -271,7 +326,7 @@ def plot_joyplot(raw_data_file, prefix, year, race):
     exp_finish = {}
     valid_results = {}
     for idx, driver in enumerate(drivers):
-        driver_ranks = np.where(active_mask[:, idx], ranks[:, idx], 20)
+        driver_ranks = np.where(active_mask[:, idx], ranks[:, idx], len(drivers))
         exp_finish[driver] = np.mean(driver_ranks)
         valid_results[driver] = driver_ranks
         
@@ -322,8 +377,8 @@ def plot_joyplot(raw_data_file, prefix, year, race):
                 pass
             
         ax.set_title(tier_name, loc='left', fontweight='bold', fontsize=12)
-        ax.set_xlim(0.5, 20.5)
-        ax.set_xticks(range(1, 21))
+        ax.set_xlim(0.5, len(drivers) + 0.5)
+        ax.set_xticks(range(1, len(drivers) + 1))
         ax.set_ylabel('')
         ax.set_yticks([])  # Hide y axis completely
         
@@ -340,13 +395,14 @@ def plot_joyplot(raw_data_file, prefix, year, race):
         ax.grid(axis='x', linestyle='--', alpha=0.3)
         
     axes[2].set_xlabel('Finishing Position', fontsize=12)
-    fig.suptitle(f'Finishing Position Scenarios\n{year} {race.title()}', fontsize=18, fontweight='bold', y=0.98, x=0.1, ha='left')
+    fig.suptitle(f'Finishing Position Scenarios\n{year} {race.title()}', fontsize=18, fontweight='bold', y=0.98, x=0.12, ha='left')
     
     # Custom annotations for the lines
     axes[0].text(3.5, axes[0].get_ylim()[1]*0.9, ' Podium Cutoff', color='#F57F17', fontweight='bold', fontsize=9)
     axes[0].text(10.5, axes[0].get_ylim()[1]*0.9, ' Points Cutoff', color='#2E7D32', fontweight='bold', fontsize=9)
     
     add_watermark(fig, year, race)
+    add_logo(fig)
     plt.tight_layout()
     plt.savefig(f"{prefix}_tiered_finishes.png", dpi=300, bbox_inches='tight')
     plt.close()
@@ -386,7 +442,7 @@ def plot_dnf_risk(results_file, prefix, year, race):
         ax.text(p + 0.5, i, f"{p:.1f}%", va='center', color='#555555', fontsize=9)
         
     ax.set_xlabel('Probability of Retirement (%)', fontsize=10, color='#666')
-    ax.set_title(f'Danger Zone\nDNF Risk Profile', fontsize=16, fontweight='bold', pad=20, loc='left')
+    ax.set_title(f'Danger Zone\nDNF Risk Profile', fontsize=16, fontweight='bold', pad=35, loc='left')
     
     for spine in ax.spines.values():
         spine.set_visible(False)
@@ -394,6 +450,7 @@ def plot_dnf_risk(results_file, prefix, year, race):
     ax.grid(axis='x', linestyle='--', alpha=0.5)
     
     add_watermark(fig, year, race)
+    add_logo(fig)
     plt.tight_layout()
     plt.savefig(f"{prefix}_dnf_risk.png", dpi=300, bbox_inches='tight')
     plt.close()
