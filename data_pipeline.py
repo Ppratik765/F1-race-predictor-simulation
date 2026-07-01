@@ -570,9 +570,16 @@ def extract_race_pace_and_deg(session):
             continue  # already has stint data
 
         filled = {}
+        # Try to use their fastest lap, else use field median
+        fastest_lap = driver_fastest_lap.get(driver)
+        if fastest_lap:
+            base_soft = fastest_lap + HEAVY_FUEL_PENALTY
+        else:
+            base_soft = fallback_soft_pace
+            
         for compound in COMPOUNDS:
             filled[compound] = {
-                'base_pace': fallback_soft_pace + COMPOUND_OFFSETS[compound],
+                'base_pace': base_soft + COMPOUND_OFFSETS[compound],
                 'deg_slope': median_deg,
             }
         race_stats[driver] = filled

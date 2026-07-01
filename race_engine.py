@@ -94,17 +94,17 @@ def run_race_sim(
             # Calculate what this driver's pace *should* be based on qualifying
             expected_pace = pole_pace + ((grid_pos - 1) * 0.12)
             
-            # Apply Season Trend Modifier
+            # Apply Season Trend Modifier (Max +/- 0.15s to prevent overriding current weekend pace)
             if season_trends and d in season_trends:
                 sunday_conv = season_trends[d].get('sunday_conversion', 0.0)
-                sunday_bonus = np.clip(sunday_conv, -0.4, 0.4)
+                sunday_bonus = np.clip(sunday_conv, -0.15, 0.15)
                 expected_pace -= sunday_bonus
             
             # Apply bidirectional clamping:
             # - A backmarker cannot magically be more than 0.2s faster than their expected grid pace
-            # - A front-runner cannot be severely punished (max +0.5s) if they ran heavy fuel in FP2
+            # - A front-runner cannot be severely punished (max +0.15s) if they ran heavy fuel in FP2
             base_pace[i] = np.maximum(base_pace[i], expected_pace - 0.2)
-            base_pace[i] = np.minimum(base_pace[i], expected_pace + 0.5)
+            base_pace[i] = np.minimum(base_pace[i], expected_pace + 0.15)
 
     # ── Generic Degradation Anchor ─────────────────────────────────────────────
     # Short 3-lap practice stints often produce flat or negative slopes, 
@@ -187,7 +187,8 @@ def run_race_sim(
 
     # ── State tensors ─────────────────────────────────────────────────
     grid_offsets = np.array([grid_positions.get(d, 20) for d in drivers])
-    total_race_time = np.tile(grid_offsets * 0.2,
+    # Initial grid spacing: ~0.4s per grid slot to prevent instant mega-DRS trains
+    total_race_time = np.tile(grid_offsets * 0.4,
                               (num_iterations, 1))  # (iters, drivers)
 
     active_mask = np.ones((num_iterations, num_drivers), dtype=bool)
@@ -279,9 +280,20 @@ def run_race_sim(
         # Base penalty scaled by overtaking difficulty (0.3 is the old default)
         # Higher difficulty = harsher penalty for being stuck in dirty air (simulating battery drain & aero loss)
         penalty_multiplier = 0.3 * (overtaking_diff / 0.5)
+        dirty_pen = np.where(dirty_air_mask, (2.0 - gaps) * penalty_multiplier, 0.0)
+        
+        # DRS Bonus: Only applied if within 1.0s, scaled inversely by overtaking difficulty
+        # Easy overtaking (low diff) = Powerful DRS (-0.7s)
+        # Hard overtaking (high diff e.g. Monaco) = Weak DRS (0.0s)
+        drs_effectiveness = np.clip(1.0 - overtaking_diff, 0.0, 1.0)
+        # DRS is disabled on Lap 1.
+        drs_bonus = np.where((gaps < 1.0) & (lap > 1), -0.7 * drs_effectiveness, 0.0)
         
         pen_sorted = np.zeros_like(total_race_time)
-        pen_sorted[:, 1:] = np.where(dirty_air_mask, (2.0 - gaps) * penalty_multiplier, 0.0)
+        
+        # Combine dirty air and DRS. Add a tiny stochastic element so cars don't indefinitely swap
+        stochastic_pass = np.random.normal(1.0, 0.1, size=gaps.shape)
+        pen_sorted[:, 1:] = (dirty_pen + drs_bonus) * stochastic_pass
 
         # Scatter penalties back to original driver order
         penalties = np.zeros_like(total_race_time)
