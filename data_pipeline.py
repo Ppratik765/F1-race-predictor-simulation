@@ -431,8 +431,8 @@ def extract_race_pace_and_deg(session):
             # Keep only laps on the dominant compound
             stint_df = stint_df[stint_df['Compound'] == compound]
 
-            # Raw stint must be ≥ 4 laps to qualify as a long run
-            if len(stint_df) < 4:
+            # Raw stint must be ≥ 7 laps to qualify as a long run (filters out qualifying sims)
+            if len(stint_df) < 7:
                 continue
 
             x_raw = stint_df['TyreLife'].values.astype(float)
@@ -464,18 +464,19 @@ def extract_race_pace_and_deg(session):
             # Linear fit: y = mx + c
             m_raw, c_raw = np.polyfit(x_clean, y_clean, 1)
             
-            # ── Polyfit Sanity Check ──────────────────────────────────
-            # If the IQR filter fails to catch an outlier on a short 3-lap run, 
-            # it produces absurd slopes (e.g., 20s/lap) and negative base paces.
-            # We strictly bound acceptable tire degradation (-0.05 to 0.4 seconds/lap).
-            # Note: Fuel burn causes lap times to drop by ~0.05s per lap. On low 
-            # degradation tracks (like Monza), raw lap time slopes can legitimately 
-            # be slightly negative (-0.02) because fuel burn outpaces tire wear.
-            if m_raw > 0.4 or m_raw < -0.05:
-                continue
+            # ── Polyfit Sanity Check & Clamping ───────────────────────
+            # Linear extrapolation backwards from old tires (e.g., TyreLife=20) 
+            # with high deg (e.g., 0.3s/lap) hallucinates impossible base paces.
+            # We clip the slope to realistic F1 degradation (-0.02 to 0.15s/lap)
+            # and recompute the intercept (base pace) to anchor it realistically.
+            m_clamped = np.clip(m_raw, -0.02, 0.15)
+            c_clamped = np.mean(y_clean) - m_clamped * np.mean(x_clean)
+            
+            base_pace = c_clamped
+            deg_slope = m_clamped
                 
             # Base pace must be a physically possible lap time (>40s)
-            if c_raw < 40.0:
+            if c_clamped < 40.0:
                 continue
                 
             m = float(m_raw)
@@ -486,13 +487,13 @@ def extract_race_pace_and_deg(session):
             # is extremely slow compared to the driver's fastest lap 
             # (> 108%), it's not a genuine race-pace stint.
             fastest_lap = driver_fastest_lap.get(driver)
-            if fastest_lap and c > fastest_lap * 1.08:
+            if fastest_lap and base_pace > fastest_lap * 1.08:
                 continue
 
             # Keep the most representative run per compound (lowest base)
-            if compound not in driver_stats or c < driver_stats[compound]['base_pace']:
-                driver_stats[compound] = {'base_pace': c, 'deg_slope': m}
-                field_pace.setdefault(compound, []).append(c)
+            if compound not in driver_stats or base_pace < driver_stats[compound]['base_pace']:
+                driver_stats[compound] = {'base_pace': float(base_pace), 'deg_slope': float(deg_slope)}
+                field_pace.setdefault(compound, []).append(base_pace)
 
         if driver_stats:
             raw_stats[driver] = driver_stats
