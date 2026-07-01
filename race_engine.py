@@ -94,17 +94,15 @@ def run_race_sim(
             # Calculate what this driver's pace *should* be based on qualifying
             expected_pace = pole_pace + ((grid_pos - 1) * 0.12)
             
-            # Apply Season Trend Modifier (Max +/- 0.15s to prevent overriding current weekend pace)
+            # Apply upper clamping:
+            # - A front-runner cannot be severely punished (max +0.15s) if they ran heavy fuel in FP2 or had no data
+            base_pace[i] = np.minimum(base_pace[i], expected_pace + 0.15)
+            
+            # Apply Season Trend Modifier directly to final base pace (Max +/- 0.1s to respect current weekend form)
             if season_trends and d in season_trends:
                 sunday_conv = season_trends[d].get('sunday_conversion', 0.0)
-                sunday_bonus = np.clip(sunday_conv, -0.15, 0.15)
-                expected_pace -= sunday_bonus
-            
-            # Apply bidirectional clamping:
-            # - A backmarker cannot magically be more than 0.2s faster than their expected grid pace
-            # - A front-runner cannot be severely punished (max +0.15s) if they ran heavy fuel in FP2
-            base_pace[i] = np.maximum(base_pace[i], expected_pace - 0.2)
-            base_pace[i] = np.minimum(base_pace[i], expected_pace + 0.15)
+                sunday_bonus = np.clip(sunday_conv, -0.1, 0.1)
+                base_pace[i] -= sunday_bonus
 
     # ── Generic Degradation Anchor ─────────────────────────────────────────────
     # Short 3-lap practice stints often produce flat or negative slopes, 
@@ -132,10 +130,10 @@ def run_race_sim(
                 # Front runners expect better deg, backmarkers expect worse (+0.003s/lap per grid drop)
                 expected_deg = median_field_deg + ((grid_pos - 10) * 0.003)
                 
-                # Apply Season Trend Modifier to Degradation
+                # Apply Season Trend Modifier to Degradation (Max +/- 0.005 to prevent massive blowouts over long stints)
                 if season_trends and d in season_trends:
                     sunday_conv = season_trends[d].get('sunday_conversion', 0.0)
-                    deg_bonus = np.clip(sunday_conv * 0.05, -0.015, 0.015)
+                    deg_bonus = np.clip(sunday_conv * 0.05, -0.005, 0.005)
                     expected_deg -= deg_bonus
 
                 # F1 race pace is heavily dictated by Qualifying speed. We aggressively 
