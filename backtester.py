@@ -21,33 +21,9 @@ import fastf1
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
 fastf1.set_log_level('ERROR')
-import threading
-import itertools
-
-class Spinner:
-    def __init__(self, message="Fetching data..."):
-        self.message = message
-        self.spinner = itertools.cycle(['|', '/', '-', '\\'])
-        self.stop_event = threading.Event()
-        self.thread = threading.Thread(target=self._spin)
-
-    def _spin(self):
-        while not self.stop_event.is_set():
-            sys.stdout.write(f"\r{self.message} {next(self.spinner)}")
-            sys.stdout.flush()
-            time.sleep(0.1)
-
-    def __enter__(self):
-        self.thread.start()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.stop_event.set()
-        self.thread.join()
-        sys.stdout.write(f"\r✓ {self.message} Done!{' ' * 20}\n")
-        sys.stdout.flush()
 
 from data_pipeline import (
+    Spinner,
     get_session,
     extract_quali_stats,
     extract_race_pace_and_deg,
@@ -297,10 +273,10 @@ def main(year=2025, race='Monza', num_iterations=50_000):
         )
     else:
         # No real qualifying → run simulation
-        print("Doing quali simulation...")
-        expected_grid, pole_probs, _, quali_drivers = run_quali_sim(
-            quali_stats, track_info, season_trends, num_iterations
-        )
+        with Spinner("Doing quali simulation..."):
+            expected_grid, pole_probs, _, quali_drivers = run_quali_sim(
+                quali_stats, track_info, season_trends, num_iterations
+            )
         grid_positions = expected_grid
         grid_source = "PREDICTED (Monte Carlo)"
 
@@ -322,24 +298,24 @@ def main(year=2025, race='Monza', num_iterations=50_000):
     # ── Step 3: Race simulation ───────────────────────────────────────
     num_laps = 57
     t2 = time.time()
-    print("Doing race simulation...")
-
+    
     # Ensure grid_positions only includes drivers we have race pace for
     sim_grid = {d: grid_positions.get(d, 20) for d in race_stats.keys()}
 
-    finishing_probs, final_ranks, race_drivers, active_mask = run_race_sim(
-        race_stats=race_stats,
-        reliability_stats=reliability_stats,
-        grid_positions=sim_grid,
-        num_iterations=num_iterations,
-        num_laps=num_laps,
-        num_pitstops=2,
-        pitstop_time_loss=22.0,
-        season_trends=season_trends,
-        weather_context=weather_context,
-        track_info=track_info,
-        year=year,
-    )
+    with Spinner("Doing race simulation..."):
+        finishing_probs, final_ranks, race_drivers, active_mask = run_race_sim(
+            race_stats=race_stats,
+            reliability_stats=reliability_stats,
+            grid_positions=sim_grid,
+            num_iterations=num_iterations,
+            num_laps=num_laps,
+            num_pitstops=2,
+            pitstop_time_loss=22.0,
+            season_trends=season_trends,
+            weather_context=weather_context,
+            track_info=track_info,
+            year=year,
+        )
     t3 = time.time()
     print(f"✓ Race done in {t3 - t2:.1f} s")
 

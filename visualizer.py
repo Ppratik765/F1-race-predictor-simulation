@@ -3,10 +3,13 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import os
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
 import argparse
 import textwrap
 import matplotlib.image as mpimg
 from matplotlib.patches import Circle
+from data_pipeline import Spinner
 # ── Aesthetic Configuration ──────────────────────────────────────────────────
 # F1 Light & Clean Storytelling Theme
 plt.rcParams.update({
@@ -74,7 +77,6 @@ def add_watermark(fig, year, race):
 
 # ── Chart 1: The Championship Contenders (Win, Podium & Points) ──────────────
 def plot_win_probabilities(results_file, prefix, year, race):
-    print("Generating Win, Podium & Points Probabilities...")
     with open(results_file, 'r') as f:
         data = json.load(f)
         
@@ -141,7 +143,6 @@ def plot_win_probabilities(results_file, prefix, year, race):
 
 # ── Chart 2: The Race for Points (Expected Points Yield) ─────────────────────
 def plot_expected_points(results_file, raw_data_file, prefix, year, race):
-    print("Generating Expected Points...")
     if not os.path.exists(raw_data_file):
         return
         
@@ -191,7 +192,6 @@ def plot_expected_points(results_file, raw_data_file, prefix, year, race):
 
 # ── Chart 3: The Biggest Movers (Net Position Change) ────────────────────────
 def plot_grid_vs_finish(results_file, raw_data_file, prefix, year, race):
-    print("Generating Net Position Change (Movers)...")
     with open(results_file, 'r') as f:
         res_data = json.load(f)
     with open(raw_data_file, 'r') as f:
@@ -257,7 +257,6 @@ def plot_grid_vs_finish(results_file, raw_data_file, prefix, year, race):
 
 # ── Chart 4: Finishing Position Densities (Tiers) ────────────────────────────
 def plot_joyplot(raw_data_file, prefix, year, race):
-    print("Generating Tiered KDE Plots...")
     if not os.path.exists(raw_data_file):
         return
         
@@ -354,7 +353,6 @@ def plot_joyplot(raw_data_file, prefix, year, race):
 
 # ── Chart 5: DNF Risk Profile (Lollipop) ─────────────────────────────────────
 def plot_dnf_risk(results_file, prefix, year, race):
-    print("Generating DNF Risk Profile (Lollipop)...")
     with open(results_file, 'r') as f:
         data = json.load(f)
         
@@ -416,11 +414,12 @@ if __name__ == "__main__":
     load_team_colors(res_file)
     
     try:
-        plot_joyplot(raw_file, prefix, args.year, args.race)
-        plot_win_probabilities(res_file, prefix, args.year, args.race)
-        plot_expected_points(res_file, raw_file, prefix, args.year, args.race)
-        plot_grid_vs_finish(res_file, raw_file, prefix, args.year, args.race)
-        plot_dnf_risk(res_file, prefix, args.year, args.race)
+        with Spinner("Generating visualizations..."):
+            plot_joyplot(raw_file, prefix, args.year, args.race)
+            plot_win_probabilities(res_file, prefix, args.year, args.race)
+            plot_expected_points(res_file, raw_file, prefix, args.year, args.race)
+            plot_grid_vs_finish(res_file, raw_file, prefix, args.year, args.race)
+            plot_dnf_risk(res_file, prefix, args.year, args.race)
         print(f"\n[SUCCESS] Generated 5 charts in {prefix}*.png")
     except Exception as e:
         print(f"Error generating visualizations: {e}")
