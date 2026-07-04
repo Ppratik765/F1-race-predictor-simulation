@@ -4,3 +4,4 @@ _cache/
 *.json
 visualizations/*.png
 *.pyc
+watermark.png
