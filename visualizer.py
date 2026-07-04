@@ -258,13 +258,10 @@ def plot_grid_vs_finish(results_file, raw_data_file, prefix, year, race):
     net_change = {}
     
     for idx, driver in enumerate(drivers):
-        # Only take ranks where the driver actually finished the race (active_mask is True)
-        finishing_ranks = ranks[active_mask[:, idx], idx]
-        
-        if len(finishing_ranks) > 0:
-            exp_finish = np.mean(finishing_ranks)
-        else:
-            exp_finish = len(drivers) # Fallback
+        # Use ALL iterations (including DNFs) for true expected rank
+        # If we only use iterations where they finished (survivor bias),
+        # their average rank becomes artificially high.
+        exp_finish = np.mean(ranks[:, idx])
             
         grid_pos = res_data['results'][driver].get('Grid_Position', len(drivers))
         net_change[driver] = grid_pos - exp_finish  # Positive means gaining places
@@ -295,8 +292,8 @@ def plot_grid_vs_finish(results_file, raw_data_file, prefix, year, race):
         elif c < -0.5:
             ax.text(c - 0.1, i, f"{c:.1f}", va='center', ha='right', color='#C62828', fontweight='bold', fontsize=9)
             
-    ax.set_xlabel('Expected Positions Gained / Lost vs. Grid', fontsize=10, color='#666')
-    ax.set_title(f'The Chargers & The Fallers\nExpected Position Changes', fontsize=16, fontweight='bold', pad=35, loc='left')
+    ax.set_xlabel('Expected Positions Gained / Lost vs. Grid (Includes DNF / Crash Risk)', fontsize=10, color='#666')
+    ax.set_title(f'Risk-Adjusted Position Changes\nFactoring in Expected DNF Probabilities', fontsize=16, fontweight='bold', pad=35, loc='left')
     
     # Hide all spines except bottom
     for spine in ax.spines.values():
