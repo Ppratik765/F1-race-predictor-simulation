@@ -195,20 +195,43 @@ def run_race_sim(
     active_mask = np.ones((num_iterations, num_drivers), dtype=bool)
     tire_ages   = np.ones((num_iterations, num_drivers))  # start at lap 1
 
-    # ── DNF thresholds array ──────────────────────────────────────────
+    # ── Pre-Compute Bootstrapped DNFs (Empirical PMF) ─────────────────
+    # 1. Sample total DNFs per iteration based on empirical PMF
+    dnf_pmf = [0.10, 0.25, 0.35, 0.20, 0.10]
+    dnf_counts = np.array([0, 1, 2, 3, 4])
+    num_dnfs_per_iter = np.random.choice(dnf_counts, size=num_iterations, p=dnf_pmf)
+
+    # 2. Extract driver base reliability as weights
     fallback_dnf = reliability_stats.get('__ROOKIE_FALLBACK__', 0.003)
-    dnf_thresholds = np.array([
-        reliability_stats.get(d, fallback_dnf) for d in drivers
-    ])  # shape (num_drivers,)
+    driver_weights = np.array([reliability_stats.get(d, fallback_dnf) for d in drivers])
+    
+    # 3. Gumbel-Max Trick for vectorized weighted sampling without replacement
+    weights_mat = np.tile(driver_weights, (num_iterations, 1))
+    u = np.random.uniform(0, 1, size=(num_iterations, num_drivers))
+    gumbel_scores = np.log(weights_mat) - np.log(-np.log(u))
+    
+    # Sort scores descending to find the "top" drivers who will DNF
+    rankings = np.argsort(-gumbel_scores, axis=1)
+    ranks = np.empty_like(rankings)
+    np.put_along_axis(ranks, rankings, np.arange(num_drivers)[np.newaxis, :], axis=1)
+    
+    # Boolean mask of which drivers DNF in each iteration
+    is_dnf = ranks < num_dnfs_per_iter[:, np.newaxis]
+
+    # 4. Assign stochastic DNF laps (Lap 1 has higher weight for chaos)
+    lap_probs = np.ones(num_laps)
+    # Apply track-specific Turn 1 chaos if provided, else use baseline 5x weight
+    lap_probs[0] += (track_info.get('turn_1_chaos', 0.05) * 100) if track_info else 5.0
+    lap_probs /= lap_probs.sum()
+    
+    random_laps = np.random.choice(np.arange(1, num_laps + 1), size=(num_iterations, num_drivers), p=lap_probs)
+    dnf_laps = np.where(is_dnf, random_laps, np.inf)
 
     # Track which stint each driver is on: 0-indexed
     current_stint = np.zeros((num_iterations, num_drivers), dtype=np.intp)
 
     # Pre-compute driver index row for advanced indexing
     drv_idx = np.arange(num_drivers)                      # (D,)
-
-    # DNF probability per lap (≈ 14 % retirement rate over 57 laps)
-    DNF_PROB_PER_LAP = 0.003
 
     # ── Main lap loop ─────────────────────────────────────────────────
     for lap in range(1, num_laps + 1):
@@ -318,16 +341,8 @@ def run_race_sim(
         # Apply penalties only to drivers still actively racing
         total_race_time += np.where(active_mask, penalties, 0.0)
 
-        # ── Stochastic DNF ────────────────────────────────────────────
-        dnf_rolls = np.random.random(size=(num_iterations, num_drivers))
-        
-        # Turn 1 Chaos Modifier
-        current_dnf_thresholds = dnf_thresholds.copy()
-        if lap == 1 and track_info and 'turn_1_chaos' in track_info:
-            current_dnf_thresholds += track_info['turn_1_chaos']
-            
-        new_dnfs  = (dnf_rolls < current_dnf_thresholds) & active_mask
-        active_mask &= ~new_dnfs
+        # ── Pre-Computed DNF Check ────────────────────────────────────
+        active_mask &= (lap < dnf_laps)
         total_race_time = np.where(active_mask, total_race_time, np.inf)
 
     # ── Final classification ──────────────────────────────────────────
