@@ -55,7 +55,7 @@ def setup_output_dir(year, race):
 def add_watermark(fig, year, race):
     # Bottom right corner watermark text
     fig.text(0.95, 0.02, 'Priyanshu Pratik', 
-             fontsize=9, color='#aaaaaa', ha='right', va='center', fontweight='bold', alpha=0.8)
+             fontsize=9, color='#777777', ha='right', va='center', fontweight='bold', alpha=0.9)
     
     # Add circular image
     try:
@@ -339,7 +339,9 @@ def plot_joyplot(raw_data_file, prefix, year, race):
     fig, axes = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
     
     for ax, (tier_name, tier_drivers) in zip(axes, tiers):
-        for driver in reversed(tier_drivers):  # Reverse so best is painted last/on top
+        # Sort drivers by the density (height) of their peak so taller peaks are painted first (in background)
+        tier_drivers_sorted = sorted(tier_drivers, key=lambda d: np.max(np.histogram(valid_results[d], bins=range(1, len(drivers) + 2))[0]), reverse=True)
+        for driver in tier_drivers_sorted:
             sns.kdeplot(valid_results[driver], 
                         color=get_color(driver), 
                         fill=True, 
