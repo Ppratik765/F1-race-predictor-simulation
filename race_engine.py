@@ -204,6 +204,7 @@ def run_race_sim(
     # 2. Extract driver base reliability as weights
     fallback_dnf = reliability_stats.get('__ROOKIE_FALLBACK__', 0.003)
     driver_weights = np.array([reliability_stats.get(d, fallback_dnf) for d in drivers])
+    driver_weights /= np.sum(driver_weights)
     
     # 3. Gumbel-Max Trick for vectorized weighted sampling without replacement
     weights_mat = np.tile(driver_weights, (num_iterations, 1))
@@ -253,8 +254,19 @@ def run_race_sim(
         # ── Lap time ──────────────────────────────────────────────────
         lap_time = current_bp + (tire_ages * current_ds)
 
-        # Stochastic variance (± 0.3 s)
-        lap_time += np.random.normal(0, 0.3,
+        # ── Dynamic Leader Pacing Penalty ─────────────────────────────
+        # Find the index of the leader in each iteration
+        leader_idx = np.argmin(np.where(active_mask, total_race_time, np.inf), axis=1)
+        
+        # Create boolean mask for the leader
+        is_leader = np.zeros((num_iterations, num_drivers), dtype=bool)
+        np.put_along_axis(is_leader, leader_idx[:, np.newaxis], True, axis=1)
+        
+        # Mean offset: 0.0 for normal cars, +0.15 for the leader (pacing/ERS management)
+        mean_offset = np.where(is_leader, 0.15, 0.0)
+
+        # Stochastic variance (expanded to ± 0.4 s to induce organic position swapping)
+        lap_time += np.random.normal(mean_offset, 0.4,
                                      size=(num_iterations, num_drivers))
 
         # ── Pit stop on this lap? ─────────────────────────────────────

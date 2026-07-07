@@ -687,7 +687,8 @@ def extract_reliability_stats(year, current_race):
                 break # Cannot fetch previous year
 
     driver_races = {}
-    driver_dnfs = {}
+    driver_mechanical = {}
+    driver_collisions = {}
 
     for (fetch_year, fetch_round) in races_to_fetch:
         try:
@@ -710,32 +711,35 @@ def extract_reliability_stats(year, current_race):
                 
                 # Check if status is a DNF (not finished and not +Laps)
                 if status != 'finished' and 'lap' not in status:
-                    driver_dnfs[abbr] = driver_dnfs.get(abbr, 0) + 1
+                    if any(term in status for term in ['accident', 'collision', 'spun', 'crash']):
+                        driver_collisions[abbr] = driver_collisions.get(abbr, 0) + 1
+                    else:
+                        driver_mechanical[abbr] = driver_mechanical.get(abbr, 0) + 1
                     
         except Exception:
             continue
             
     reliability_stats = {}
     
-    # Calculate per-lap probabilities (Assumed 50 laps per race)
-    # Floor: 0.001, Cap: 0.008
-    grid_total_dnfs = sum(driver_dnfs.values())
+    # Calculate continuous per-lap probabilities (Assumed 50 laps per race)
+    grid_total_mechanical = sum(driver_mechanical.values())
+    grid_total_collisions = sum(driver_collisions.values())
     grid_total_races = sum(driver_races.values())
     
-    avg_dnf_rate = (grid_total_dnfs / (grid_total_races * 50)) if grid_total_races > 0 else 0.003
-    rookie_penalty = min(avg_dnf_rate * 1.2, 0.008)
+    avg_dnf_rate = ((grid_total_mechanical + grid_total_collisions) / (grid_total_races * 50)) if grid_total_races > 0 else 0.003
+    rookie_penalty = avg_dnf_rate * 1.2
     
-    # Populate the stats
-    # We will compute the stats for drivers we found, but return a defaultdict-like behaviour
-    # via rookie_penalty for any driver not in this dict during the simulation.
+    # Populate the stats with continuous float assignment logic
     for driver, races in driver_races.items():
-        dnfs = driver_dnfs.get(driver, 0)
-        rate = dnfs / (races * 50.0)
-        smoothed_rate = np.clip(rate, 0.001, 0.008)
-        reliability_stats[driver] = smoothed_rate
+        mech_rate = driver_mechanical.get(driver, 0) / (races * 50.0)
+        coll_rate = driver_collisions.get(driver, 0) / (races * 50.0)
+        
+        continuous_weight = mech_rate + coll_rate
+        # Remove tiered bucketing (no np.clip), use tiny fallback to prevent log(0) in PMF sampling
+        reliability_stats[driver] = max(continuous_weight, 0.0001)
         
     # Store the rookie penalty in a special key so the engine can use it for unknown drivers
-    reliability_stats['__ROOKIE_FALLBACK__'] = np.clip(rookie_penalty, 0.001, 0.008)
+    reliability_stats['__ROOKIE_FALLBACK__'] = max(rookie_penalty, 0.0001)
 
     return reliability_stats
 
