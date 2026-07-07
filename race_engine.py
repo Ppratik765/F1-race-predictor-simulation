@@ -239,6 +239,14 @@ def run_race_sim(
     # Generates a permanent pace offset for each driver in each universe.
     setup_variance = np.random.normal(0, 0.15, size=(num_iterations, num_drivers))
 
+    # ── Pre-compute Unscheduled Pitstops ──────────────────────────────
+    # Probability per lap is 0.0005. We determine if a driver gets an unscheduled 
+    # stop over the whole race, and at what lap, to remove RNG from the inner loop.
+    unscheduled_probs = 1 - (1 - 0.0005) ** num_laps
+    has_unscheduled = np.random.random(size=(num_iterations, num_drivers)) < unscheduled_probs
+    unscheduled_lap = np.random.randint(1, num_laps + 1, size=(num_iterations, num_drivers))
+    unscheduled_lap = np.where(has_unscheduled, unscheduled_lap, -1)
+
     # ── Main lap loop ─────────────────────────────────────────────────
     for lap in range(1, num_laps + 1):
 
@@ -271,8 +279,8 @@ def run_race_sim(
         mean_offset = np.where(is_leader, 0.15, 0.0)
 
         # Stochastic variance (expanded to ± 0.4 s to induce organic position swapping)
-        lap_time += np.random.normal(mean_offset, 0.4,
-                                     size=(num_iterations, num_drivers))
+        # Optimized: Generate N(0, 1) and scale/shift to avoid slow array-based loc in np.random.normal
+        lap_time += mean_offset + (np.random.randn(num_iterations, num_drivers) * 0.4)
 
         # ── Pit stop on this lap? ─────────────────────────────────────
         pitting = np.zeros((num_iterations, num_drivers), dtype=bool)
@@ -280,8 +288,7 @@ def run_race_sim(
             pitting |= (lap == p_laps)
             
         # ── Unscheduled Pitstops (Minor Issues) ───────────────────────
-        minor_issue_rolls = np.random.random(size=(num_iterations, num_drivers))
-        unscheduled_pit = (minor_issue_rolls < 0.0005) & active_mask
+        unscheduled_pit = (lap == unscheduled_lap) & active_mask
         pitting |= unscheduled_pit
 
         lap_time += np.where(pitting, pitstop_time_loss, 0.0)
