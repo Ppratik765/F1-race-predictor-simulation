@@ -347,6 +347,7 @@ def plot_joyplot(raw_data_file, prefix, year, race):
                         linewidth=2.5,
                         label=driver,
                         ax=ax,
+                        bw_adjust=2.0,
                         warn_singular=False)
             
             # Add driver label at the peak of their KDE curve

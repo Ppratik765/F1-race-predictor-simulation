@@ -234,6 +234,11 @@ def run_race_sim(
     # Pre-compute driver index row for advanced indexing
     drv_idx = np.arange(num_drivers)                      # (D,)
 
+    # ── Race Day Setup Variance ───────────────────────────────────────
+    # Simulates missing the setup window or hitting the sweet spot. 
+    # Generates a permanent pace offset for each driver in each universe.
+    setup_variance = np.random.normal(0, 0.15, size=(num_iterations, num_drivers))
+
     # ── Main lap loop ─────────────────────────────────────────────────
     for lap in range(1, num_laps + 1):
 
@@ -252,7 +257,7 @@ def run_race_sim(
         current_ds = deg_slope[drv_idx, compound_idx]     # (iters, D)
 
         # ── Lap time ──────────────────────────────────────────────────
-        lap_time = current_bp + (tire_ages * current_ds)
+        lap_time = current_bp + (tire_ages * current_ds) + setup_variance
 
         # ── Dynamic Leader Pacing Penalty ─────────────────────────────
         # Find the index of the leader in each iteration
@@ -273,6 +278,11 @@ def run_race_sim(
         pitting = np.zeros((num_iterations, num_drivers), dtype=bool)
         for p_laps in pitstop_lap_arrays:
             pitting |= (lap == p_laps)
+            
+        # ── Unscheduled Pitstops (Minor Issues) ───────────────────────
+        minor_issue_rolls = np.random.random(size=(num_iterations, num_drivers))
+        unscheduled_pit = (minor_issue_rolls < 0.0005) & active_mask
+        pitting |= unscheduled_pit
 
         lap_time += np.where(pitting, pitstop_time_loss, 0.0)
 
