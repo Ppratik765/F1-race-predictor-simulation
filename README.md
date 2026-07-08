@@ -19,7 +19,12 @@ The simulation engine is separated into modular components designed to handle sp
 
 - **Data Pipeline (`data_pipeline.py`)**: Fetches, cleans, and caches historical lap times, sector data, and driver metrics.
 - **Qualifying Engine (`quali_engine.py`)**: Simulates the three phases of qualifying (Q1, Q2, Q3) to establish a baseline starting grid, accounting for track evolution and driver one-lap pace.
-- **Race Engine (`race_engine.py`)**: Simulates the actual Grand Prix session lap-by-lap. Includes complex variables such as tire degradation, Safety Car probabilities, and historical DNF (Did Not Finish) rates.
+- **Race Engine (`race_engine.py`)**: Simulates the actual Grand Prix session lap-by-lap using an ultra-fast vectorized NumPy backend. Includes advanced sub-models:
+  - *Empirically Bootstrapped DNFs*: Top-down Probability Mass Function (PMF) distribution allocated via the Gumbel-Max trick.
+  - *Race Day Setup Variance & Unscheduled Pitstops*: Stochastic modeling for missed setup windows and non-terminal mechanical issues (e.g., slow punctures).
+  - *Organic Pacing Variance*: Dynamic ±0.4s lap-time variance and Leader Pacing penalties to induce organic overtaking.
+  - *Midfield Grid Density Risk*: Heightened Lap 1 collision weighting for cars starting in the midfield "bottleneck" zone.
+  - *Dirty-Air & Superclipping*: Real-time DRS tow factors and 2026-regulation battery drain simulations based on trailing gaps.
 - **Backtester (`backtester.py`)**: The primary orchestrator. It triggers the Monte Carlo loop (default 50,000 iterations), aggregates positional frequencies, and outputs probabilistic JSON files.
 - **Visualizer (`visualizer.py`)**: Consumes the raw JSON probability distributions and generates professional, high-resolution Matplotlib charts optimized for analytical reporting.
 
