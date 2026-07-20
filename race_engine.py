@@ -26,6 +26,10 @@ def run_race_sim(
     weather_context=None,
     track_info=None,
     year=None,
+    team_mapping=None,
+    pitstop_stats=None,
+    power_index=None,
+    tow_flags=None,
 ):
     """
     Fully-vectorised race simulation.
@@ -36,7 +40,23 @@ def run_race_sim(
         num_iterations:   Monte Carlo iterations
         num_laps:         total race laps
         num_pitstops:     planned stops (1 / 2 / 3)
-        pitstop_time_loss: average pit-lane delta (seconds)
+        pitstop_time_loss: fallback average pit-lane delta (seconds), used only
+                           when pitstop_stats/team_mapping aren't supplied.
+        team_mapping:     dict[driver] -> {'team': str, ...} from extract_team_mapping
+        pitstop_stats:    dict[team] -> {'pit_loss': float, 'botch_prob': float}
+                          from extract_pitstop_stats. Falls back to pitstop_time_loss
+                          for any team not present (via '__FIELD__' key).
+        power_index:      dict[driver] -> float straight-line speed z-score from
+                          extract_speed_metrics. Rewards genuine power-unit /
+                          energy-deployment advantage on power-sensitive tracks.
+        tow_flags:        dict[driver] -> float estimated seconds of tow-inflated
+                          grid pace from detect_tow_assisted_laps. A driver's grid
+                          slot is trusted less as a signal of their true race pace
+                          when it was likely boosted by an unusually large draft
+                          (e.g. "Hadjar towed Verstappen to P2 at Spa" should not
+                          make the model assume Verstappen has P2-equivalent race pace).
+        track_info:       also consulted here for 'sc_probability' / 'vsc_probability'
+                          to drive the Safety Car / Virtual Safety Car model below.
 
     Returns:
         finishing_probabilities: dict[driver -> {Win, Podium, Top10, Finish, DNF}]
@@ -80,6 +100,22 @@ def run_race_sim(
             base_pace[i, cidx] = cstats['base_pace']
             deg_slope[i, cidx] = cstats['deg_slope']
 
+    # ── Power-Unit Deployment / Straight-Line Speed Correction ─────────
+    # 2026 cars are far more sensitive to energy deployment and drag trim than
+    # prior regs. A driver/car that is genuinely faster in a straight line
+    # (speed-trap z-score from extract_speed_metrics) should be rewarded for
+    # it, scaled by how power-sensitive this circuit is (track_info tow_factor
+    # is already our proxy for "how much of the lap is flat-out"). This is
+    # what lets a car with a straight-line/energy advantage (e.g. better ERS
+    # deployment) beat a car that merely looked good in low-fuel single-lap
+    # pace but has nothing extra on the straights.
+    POWER_INDEX_SCALE = 0.35  # seconds of lap time per 1 std-dev of speed-trap advantage, at tow_factor=1.0
+    if power_index:
+        tow_factor = track_info.get('tow_factor', 0.15) if track_info else 0.15
+        for i, d in enumerate(drivers):
+            pidx = power_index.get(d, 0.0)
+            base_pace[i] -= pidx * tow_factor * POWER_INDEX_SCALE
+
     # ── Qualifying Pace Anchor ─────────────────────────────────────────
     # Free Practice 2 lap times are notoriously distorted by unknown fuel loads.
     # To prevent backmarkers (who ran low-fuel FP2 sims) from beating Pole sitters, 
@@ -94,12 +130,16 @@ def run_race_sim(
             grid_pos = grid_positions.get(d, len(drivers))
             # Calculate what this driver's pace *should* be based on qualifying
             expected_pace = pole_pace + ((grid_pos - 1) * 0.12)
-            
+
             # Apply upper clamping:
             # - If a driver ran heavy fuel or skipped long runs in FP2, their raw pace will be terrible.
             #   We clamp them to their expected grid pace so they aren't unfairly penalized for bad practice data.
             #   We add a tiny +0.05s penalty to ensure pole sitters aren't given *perfect* grace if they lacked data.
-            base_pace[i] = np.minimum(base_pace[i], expected_pace + 0.05)
+            # - If this driver's grid slot was flagged as likely tow-inflated (detect_tow_assisted_laps),
+            #   we give them much more room below their "expected" pace — their grid position is a
+            #   weaker signal of true race pace than usual, so the clamp shouldn't force them toward it.
+            tow_slack = tow_flags.get(d, 0.0) if tow_flags else 0.0
+            base_pace[i] = np.minimum(base_pace[i], expected_pace + 0.05 + tow_slack)
             
             # Apply Season Trend Modifier directly to final base pace (Max +/- 0.1s to respect current weekend form)
             if season_trends and d in season_trends:
@@ -171,6 +211,22 @@ def run_race_sim(
         stint_compounds = [0, 2, 1, 2]  # SOFT → HARD → MEDIUM → HARD
     else:
         stint_compounds = [0]           # No stop
+
+    # ── Team-specific pit-lane loss & botch probability ────────────────
+    # Real pit crews are not identical: some teams are consistently a few
+    # tenths quicker, and every team has some chance of a slow/botched stop.
+    # Falls back to the flat pitstop_time_loss scalar if no team data supplied.
+    field_fallback = {'pit_loss': pitstop_time_loss, 'botch_prob': 0.06}
+    if pitstop_stats:
+        field_fallback = pitstop_stats.get('__FIELD__', field_fallback)
+
+    pit_loss_per_driver = np.zeros(num_drivers)
+    botch_prob_per_driver = np.zeros(num_drivers)
+    for i, d in enumerate(drivers):
+        team = team_mapping.get(d, {}).get('team') if team_mapping else None
+        stats = (pitstop_stats.get(team, field_fallback) if (pitstop_stats and team) else field_fallback)
+        pit_loss_per_driver[i] = stats.get('pit_loss', pitstop_time_loss)
+        botch_prob_per_driver[i] = stats.get('botch_prob', 0.06)
 
     # ── Generate pit-stop lap arrays ──────────────────────────────────
     pitstop_lap_arrays = []
@@ -247,6 +303,46 @@ def run_race_sim(
     unscheduled_lap = np.random.randint(1, num_laps + 1, size=(num_iterations, num_drivers))
     unscheduled_lap = np.where(has_unscheduled, unscheduled_lap, -1)
 
+    # ── Safety Car / Virtual Safety Car Model ──────────────────────────
+    # This is the single biggest miss in the previous model: races were
+    # simulated as if under green-flag conditions from start to finish. A
+    # real SC bunches the field (a car in P8 can be within a second of the
+    # leader within a couple of laps), effectively erases the time cost of a
+    # pit stop taken during the window, and briefly disables DRS/dirty air.
+    # A VSC does the "everyone slows down" and "cheap pit stop" parts but
+    # does NOT bunch the field (drivers hold station at delta time).
+    sc_prob = track_info.get('sc_probability', 0.35) if track_info else 0.35
+    vsc_prob = track_info.get('vsc_probability', 0.25) if track_info else 0.25
+
+    sc_happens = np.random.random(num_iterations) < sc_prob
+    vsc_happens = np.random.random(num_iterations) < vsc_prob
+
+    # Don't let cautions start in the first 2 laps (no time to deploy) or the
+    # last 3 (no point neutralising a near-finished race).
+    safe_lo, safe_hi = 3, max(4, num_laps - 3)
+    sc_start = np.random.randint(safe_lo, safe_hi, size=num_iterations)
+    sc_duration = np.random.randint(3, 7, size=num_iterations)  # full SC: 3-6 laps
+    sc_start = np.where(sc_happens, sc_start, -1)
+
+    vsc_start = np.random.randint(safe_lo, safe_hi, size=num_iterations)
+    vsc_duration = np.random.randint(2, 5, size=num_iterations)  # VSC: 2-4 laps
+    # Keep VSC from starting inside an already-running SC window (avoid double counting)
+    vsc_start = np.where(vsc_happens & ~((vsc_start >= sc_start) & (vsc_start < sc_start + sc_duration)),
+                          vsc_start, -1)
+
+    sc_end = sc_start + sc_duration        # (iters,) — exclusive
+    vsc_end = vsc_start + vsc_duration
+
+    # Field-median green-flag pace, used to anchor caution-lap pace regardless
+    # of which compound a car happens to be on.
+    field_flat_pace = float(np.median(base_pace[:, 0]))
+    SC_PACE_MULT = 1.38   # full SC laps run ~38% off green-flag pace
+    VSC_PACE_MULT = 1.25  # VSC laps run ~25% off green-flag pace
+    SC_PIT_DISCOUNT = 0.30   # a stop taken under full SC costs ~30% of its normal loss
+    VSC_PIT_DISCOUNT = 0.60  # a stop taken under VSC costs ~60% of its normal loss
+
+    bunching_done = np.zeros(num_iterations, dtype=bool)  # has the one-time SC bunch-up fired yet?
+
     # ── Main lap loop ─────────────────────────────────────────────────
     for lap in range(1, num_laps + 1):
 
@@ -282,6 +378,40 @@ def run_race_sim(
         # Optimized: Generate N(0, 1) and scale/shift to avoid slow array-based loc in np.random.normal
         lap_time += mean_offset + (np.random.randn(num_iterations, num_drivers) * 0.4)
 
+        # ── Safety Car / VSC pace override ─────────────────────────────
+        # Under caution, real racing pace/position battles stop entirely —
+        # everyone laps at a common controlled pace instead of their own
+        # compound curve. We fully overwrite lap_time for affected rows.
+        is_sc_lap = sc_happens & (lap >= sc_start) & (lap < sc_end)          # (iters,)
+        is_vsc_lap = vsc_happens & (lap >= vsc_start) & (lap < vsc_end) & (~is_sc_lap)  # (iters,)
+
+        if np.any(is_sc_lap) or np.any(is_vsc_lap):
+            sc_pace = field_flat_pace * SC_PACE_MULT + np.random.randn(num_iterations, num_drivers) * 0.12
+            vsc_pace = field_flat_pace * VSC_PACE_MULT + np.random.randn(num_iterations, num_drivers) * 0.10
+            lap_time = np.where(is_sc_lap[:, np.newaxis], sc_pace, lap_time)
+            lap_time = np.where(is_vsc_lap[:, np.newaxis], vsc_pace, lap_time)
+
+            # One-time field bunch-up at the exact lap the full SC is deployed:
+            # rank order is preserved but absolute time gaps are crushed down
+            # to ~0.8-1.6s per car, exactly like a real field forming up
+            # behind the safety car. This is what lets a recovering car
+            # (P8 -> P3 style) close for free instead of needing 15 laps of
+            # green-flag overtaking to do it.
+            just_deployed = is_sc_lap & (lap == sc_start) & (~bunching_done)
+            if np.any(just_deployed):
+                order = np.argsort(total_race_time, axis=1)
+                gap_steps = np.take_along_axis(
+                    np.random.uniform(0.8, 1.6, size=(num_iterations, num_drivers)), order, axis=1)
+                gap_steps[:, 0] = 0.0
+                cum_gap_by_rank = np.cumsum(gap_steps, axis=1)
+                leader_time = np.take_along_axis(total_race_time, order, axis=1)[:, 0:1]
+                new_time_by_rank = leader_time + cum_gap_by_rank
+                new_time = np.empty_like(total_race_time)
+                np.put_along_axis(new_time, order, new_time_by_rank, axis=1)
+                apply_bunch = just_deployed[:, np.newaxis] & active_mask
+                total_race_time = np.where(apply_bunch, new_time, total_race_time)
+                bunching_done = bunching_done | just_deployed
+
         # ── Pit stop on this lap? ─────────────────────────────────────
         pitting = np.zeros((num_iterations, num_drivers), dtype=bool)
         for p_laps in pitstop_lap_arrays:
@@ -291,7 +421,21 @@ def run_race_sim(
         unscheduled_pit = (lap == unscheduled_lap) & active_mask
         pitting |= unscheduled_pit
 
-        lap_time += np.where(pitting, pitstop_time_loss, 0.0)
+        # Team-specific pit loss, discounted heavily if the stop falls under
+        # a Safety Car (~30% of normal cost) or VSC (~60% of normal cost) —
+        # this is the "free pit stop" dynamic that real strategists chase.
+        pit_loss_effective = np.where(
+            is_sc_lap[:, np.newaxis], pit_loss_per_driver[np.newaxis, :] * SC_PIT_DISCOUNT,
+            np.where(is_vsc_lap[:, np.newaxis], pit_loss_per_driver[np.newaxis, :] * VSC_PIT_DISCOUNT,
+                     pit_loss_per_driver[np.newaxis, :])
+        )
+
+        # Botched stop: team-specific probability of an extra slow stop
+        # (wheel gun issue, unsafe release hold, cross-threaded nut, etc.)
+        botch_occurs = pitting & (np.random.random(size=(num_iterations, num_drivers)) < botch_prob_per_driver[np.newaxis, :])
+        botch_extra = np.where(botch_occurs, np.random.uniform(8.0, 22.0, size=(num_iterations, num_drivers)), 0.0)
+
+        lap_time += np.where(pitting, pit_loss_effective + botch_extra, 0.0)
 
         # Advance stint counter and reset tire age on pit
         current_stint = np.where(pitting, current_stint + 1, current_stint)
@@ -339,9 +483,14 @@ def run_race_sim(
         # Easy overtaking (low diff) = Powerful DRS (-0.7s)
         # Hard overtaking (high diff e.g. Monaco) = Weak DRS (0.0s)
         drs_effectiveness = np.clip(1.0 - overtaking_diff, 0.0, 1.0)
-        # DRS is disabled on Lap 1.
-        drs_bonus = np.where((gaps < 1.0) & (lap > 1), -0.7 * drs_effectiveness, 0.0)
-        
+        # DRS is disabled on Lap 1 AND under Safety Car / VSC (no racing battles under caution)
+        caution_now = (is_sc_lap | is_vsc_lap)
+        drs_bonus = np.where((gaps < 1.0) & (lap > 1) & (~caution_now[:, np.newaxis]), -0.7 * drs_effectiveness, 0.0)
+
+        # No dirty-air battles under caution either — the field is running nose-to-tail
+        # at a fixed delta, not fighting for track position.
+        dirty_pen = np.where(caution_now[:, np.newaxis], 0.0, dirty_pen)
+
         pen_sorted = np.zeros_like(total_race_time)
         
         # Combine dirty air and DRS. Add a tiny stochastic element so cars don't indefinitely swap
@@ -351,17 +500,18 @@ def run_race_sim(
         # ── 2026 Battery Superclipping ──
         # High 'tow_factor' means long straights -> massive battery drain (superclipping).
         # Cars in clean air (leader, or gaps > 1.2s) suffer severe pace loss, while 
-        # followers save battery in the slipstream.
+        # followers save battery in the slipstream. Suspended under caution — nobody
+        # is pushing for lap time, so energy management stops being a differentiator.
         if year is not None and int(year) >= 2026:
             base_superclip = track_info.get('tow_factor', 0.15) if track_info else 0.15
             superclip_penalty = base_superclip * 0.8  # Up to +0.24s penalty per lap for clean air
-            
+
             # Leader (index 0) is always in clean air
-            pen_sorted[:, 0] += superclip_penalty
-            
+            pen_sorted[:, 0] += np.where(caution_now, 0.0, superclip_penalty)
+
             # Other cars are in clean air if gap > 1.2s
             clean_air_mask = gaps > 1.2
-            pen_sorted[:, 1:] += np.where(clean_air_mask, superclip_penalty, 0.0)
+            pen_sorted[:, 1:] += np.where(clean_air_mask & (~caution_now[:, np.newaxis]), superclip_penalty, 0.0)
 
         # Scatter penalties back to original driver order
         penalties = np.zeros_like(total_race_time)
@@ -372,6 +522,27 @@ def run_race_sim(
 
         # ── Pre-Computed DNF Check ────────────────────────────────────
         active_mask &= (lap < dnf_laps)
+
+        # ── Restart chaos ──────────────────────────────────────────────
+        # The lap immediately after a Safety Car period ends is when
+        # bunched-up cars under braking/battling for position produce
+        # disproportionately many incidents in real races (this is exactly
+        # the kind of situation a recovering driver under pressure — e.g.
+        # fighting through the pack — is more likely to have a mechanical
+        # or contact-induced DNF in). Scaled by the circuit's own turn_1_chaos
+        # proxy since technical/walled circuits punish restart mistakes harder.
+        restart_lap_mask = sc_happens & (lap == sc_end)
+        if np.any(restart_lap_mask):
+            restart_incident_prob = (track_info.get('turn_1_chaos', 0.05) if track_info else 0.05) * 0.5
+            restart_incident = (restart_lap_mask[:, np.newaxis] & active_mask &
+                                 (np.random.random(size=(num_iterations, num_drivers)) < restart_incident_prob))
+            active_mask &= ~restart_incident
+
+            # Extra pace scatter on the restart lap itself (jostling for position)
+            extra_restart_noise = np.where(restart_lap_mask[:, np.newaxis],
+                                            np.random.randn(num_iterations, num_drivers) * 0.3, 0.0)
+            total_race_time += np.where(active_mask, extra_restart_noise, 0.0)
+
         total_race_time = np.where(active_mask, total_race_time, np.inf)
 
     # ── Final classification ──────────────────────────────────────────
