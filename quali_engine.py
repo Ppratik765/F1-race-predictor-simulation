@@ -14,7 +14,7 @@ Outputs: expected grid positions and pole-position probability density.
 import numpy as np
 
 
-def run_quali_sim(quali_stats, track_info=None, season_trends=None, num_iterations=100_000):
+def run_quali_sim(quali_stats, track_info=None, season_trends=None, num_iterations=100_000, power_index=None):
     """
     Vectorised qualifying simulation.
 
@@ -24,6 +24,12 @@ def run_quali_sim(quali_stats, track_info=None, season_trends=None, num_iteratio
         track_info: dict containing track characteristics like tow_factor
         season_trends: dict containing quali_power_rank for sandbagging correction
         num_iterations: number of Monte Carlo draws
+        power_index: dict[driver] -> float straight-line speed z-score from
+                     extract_speed_metrics (data_pipeline.py). On power-sensitive
+                     circuits (high tow_factor), a genuine straight-line/energy
+                     deployment advantage shaves real time off the lap even in
+                     qualifying trim — this rewards that directly rather than
+                     leaving it to be inferred purely from theoretical-best sectors.
 
     Returns:
         expected_grid:      dict[driver -> float]   (average grid slot)
@@ -69,6 +75,19 @@ def run_quali_sim(quali_stats, track_info=None, season_trends=None, num_iteratio
     s1_means -= sandbag_bonus
     s2_means -= sandbag_bonus
     s3_means -= sandbag_bonus
+
+    # ── Straight-line Speed / Power-Unit Correction ────────────────────
+    # Scaled down vs. the race-pace version (quali laps are short — one
+    # or two straights — so the absolute time on offer is smaller than
+    # over a full race distance).
+    POWER_INDEX_SCALE_QUALI = 0.12  # seconds per 1 std-dev of speed-trap advantage, at tow_factor=1.0
+    if power_index and track_info:
+        tow_factor = track_info.get('tow_factor', 0.15)
+        power_bonus = np.array([power_index.get(d, 0.0) for d in drivers]) * tow_factor * POWER_INDEX_SCALE_QUALI
+        per_sector = power_bonus / 3.0
+        s1_means -= per_sector
+        s2_means -= per_sector
+        s3_means -= per_sector
 
     # ── Draw random sector times  (iterations × drivers) ──────────────
     s1 = np.random.normal(loc=s1_means, scale=s1_stds,
