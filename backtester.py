@@ -32,6 +32,10 @@ from data_pipeline import (
     extract_season_trends,
     extract_team_mapping,
     extract_weather_context,
+    extract_speed_metrics,
+    extract_pitstop_stats,
+    apply_team_sandbag_correction,
+    detect_tow_assisted_laps,
     _get_track_type,
 )
 from quali_engine import run_quali_sim
@@ -143,11 +147,13 @@ def _check_event_schedule(year, race):
 
 
 def _try_load_session(year, race, session_type):
-    """Attempts to load a session. Returns the session or None."""
+    """Attempts to load a session. Returns the session (tagged with which
+    session_type string actually succeeded, via ._loaded_as) or None."""
     try:
         s = get_session(year, race, session_type)
         # Check if the session actually has lap data
         if s.laps is not None and len(s.laps) > 0:
+            s._loaded_as = session_type
             return s
     except Exception:
         pass
@@ -208,19 +214,42 @@ def main(year=2025, race='Monza', num_iterations=50_000):
             print("  Hint: Data may not yet be uploaded for this weekend.")
             return
 
-        quali_stats = extract_quali_stats(session_fp3)
+        quali_stats, tow_flags = extract_quali_stats(session_fp3)
         race_stats  = extract_race_pace_and_deg(session_fp2)
         reliability_stats = extract_reliability_stats(year, race)
-        season_trends = extract_season_trends(year, race)
+        season_trends, team_trends = extract_season_trends(year, race)
         team_mapping = extract_team_mapping(session_fp2)
         weather_context = extract_weather_context(session_fp2)
-        
-        # Get track specifics (df_type, turn_1_chaos, tow_factor, overtaking_diff)
+
+        # Straight-line speed / power-unit deployment index (speed-trap based,
+        # blended across whichever practice sessions we actually loaded)
+        power_index = extract_speed_metrics(session_fp2) or {}
+        fp3_power_index = extract_speed_metrics(session_fp3) or {}
+        for d, v in fp3_power_index.items():
+            power_index[d] = (power_index.get(d, v) + v) / 2.0 if d in power_index else v
+
+        # Get track specifics (df_type, turn_1_chaos, tow_factor, overtaking_diff, SC/VSC rates)
         try:
             event_info = fastf1.get_event(year, race)
             track_info = _get_track_type(event_info['EventName'])
         except Exception:
             track_info = None
+
+        # Team-specific pit stop loss + botch probability, anchored to this circuit's own pit loss
+        track_pit_loss_base = (track_info.get('pit_loss_base', 22.0) if track_info else 22.0)
+        pitstop_stats = extract_pitstop_stats(year, race, track_pit_loss_base=track_pit_loss_base)
+
+        # ── Team-level sandbagging correction ──────────────────────────
+        # Session label matters: FP1-derived stats are trusted less than FP2/FP3/Quali.
+        fp3_label = getattr(session_fp3, '_loaded_as', None) or 'FP3'
+        fp2_label = getattr(session_fp2, '_loaded_as', None) or 'FP2'
+        quali_stats, _, quali_sandbag_flags = apply_team_sandbag_correction(
+            quali_stats, {}, team_mapping, team_trends, session_label=fp3_label
+        )
+        _, race_stats, race_sandbag_flags = apply_team_sandbag_correction(
+            {}, race_stats, team_mapping, team_trends, session_label=fp2_label
+        )
+        sandbag_flags = quali_sandbag_flags + race_sandbag_flags
 
     if not quali_stats or not race_stats:
         print("✗ Could not extract stats. Check session data.")
@@ -228,6 +257,38 @@ def main(year=2025, race='Monza', num_iterations=50_000):
 
     t1 = time.time()
     print(f"Data ready in {t1 - t0:.1f} s")
+
+    if sandbag_flags:
+        print("\n⚠️  SANDBAGGING / ANOMALY FLAGS")
+        for flag in sandbag_flags:
+            print(f"   • {flag}")
+
+    if tow_flags:
+        print("\n🌬️  TOW / DRAFT FLAGS (grid pace trusted less for these drivers)")
+        for d, secs in sorted(tow_flags.items(), key=lambda x: -x[1]):
+            print(f"   • {d}: fastest lap looked ~{secs:.2f}s better than their own session pace "
+                  f"suggests — likely a big slipstream, not repeatable race pace.")
+
+    low_confidence = []
+    for d, stats in race_stats.items():
+        soft = stats.get('SOFT', {})
+        if soft.get('sample_laps', 0) > 0 and soft.get('longest_stint', 99) < 9:
+            low_confidence.append((d, soft.get('longest_stint', 0), soft.get('num_stints', 0)))
+        elif soft.get('sample_laps', 0) == 0:
+            low_confidence.append((d, 0, 0))
+    if low_confidence:
+        print("\n📉  LOW-CONFIDENCE RACE PACE (short/no long-run sample — treat with caution)")
+        for d, longest, n_stints in sorted(low_confidence):
+            if longest == 0:
+                print(f"   • {d}: no qualifying long-run stint found — using fallback estimate.")
+            else:
+                print(f"   • {d}: longest long-run stint was only {longest} laps ({n_stints} stint(s)) "
+                      f"— could still reflect an unrepresentative fuel load.")
+
+    if track_info:
+        print(f"\n   Track history: SC {_pct(track_info.get('sc_probability', 0.35))} · "
+              f"VSC {_pct(track_info.get('vsc_probability', 0.25))} · "
+              f"Typical pit loss ~{track_info.get('pit_loss_base', 22.0):.1f}s")
     
     # Print weather conditions
     if weather_context:
@@ -255,11 +316,23 @@ def main(year=2025, race='Monza', num_iterations=50_000):
         quali_session = _try_load_session(year, race, 'Q')
         if quali_session is not None:
             real_grid = extract_real_grid(quali_session)
+            # The REAL quali session is what actually set the grid, so its own
+            # tow/draft situation (e.g. Hadjar towing Verstappen to P2 at Spa)
+            # takes priority over anything inferred from FP3.
+            real_tow_flags = detect_tow_assisted_laps(quali_session)
+            if real_tow_flags:
+                tow_flags = {**tow_flags, **real_tow_flags}
 
     if real_grid is not None:
         grid_source = "ACTUAL (from Qualifying)"
         grid_positions = {d: float(p) for d, p in real_grid.items()}
         print(f"Fetched real quali! ({len(real_grid)} drivers)")
+
+        if real_tow_flags:
+            print("\n🌬️  TOW / DRAFT FLAGS FROM ACTUAL QUALIFYING")
+            for d, secs in sorted(real_tow_flags.items(), key=lambda x: -x[1]):
+                print(f"   • {d}: grid slot looks ~{secs:.2f}s better than a repeatable lap — "
+                      f"race pace will not be clamped as tightly to this grid position.")
 
         # Print actual grid
         grid_rows = sorted(real_grid.items(), key=lambda x: x[1])
@@ -275,7 +348,7 @@ def main(year=2025, race='Monza', num_iterations=50_000):
         # No real qualifying → run simulation
         with Spinner("Doing quali simulation..."):
             expected_grid, pole_probs, _, quali_drivers = run_quali_sim(
-                quali_stats, track_info, season_trends, num_iterations
+                quali_stats, track_info, season_trends, num_iterations, power_index=power_index
             )
         grid_positions = expected_grid
         grid_source = "PREDICTED (Monte Carlo)"
@@ -311,11 +384,15 @@ def main(year=2025, race='Monza', num_iterations=50_000):
             num_iterations=num_iterations,
             num_laps=num_laps,
             num_pitstops=2,
-            pitstop_time_loss=22.0,
+            pitstop_time_loss=track_pit_loss_base,
             season_trends=season_trends,
             weather_context=weather_context,
             track_info=track_info,
             year=year,
+            team_mapping=team_mapping,
+            pitstop_stats=pitstop_stats,
+            power_index=power_index,
+            tow_flags=tow_flags,
         )
     t3 = time.time()
     print(f"✓ Race done in {t3 - t2:.1f} s")
