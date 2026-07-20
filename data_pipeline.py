@@ -106,55 +106,67 @@ def extract_weather_context(session):
 # - turn_1_chaos: Probability of lap 1 incident/DNF (e.g., Monza chicane, Mexico T1 are highest)
 # - tow_factor: Slipstream benefit in Quali (seconds gained). Highest at Baku, Monza, Vegas.
 # - overtaking_diff: Dirty air penalty multiplier. 1.0 = Monaco (impossible), 0.2 = Vegas (easy).
+# - sc_probability / vsc_probability: P(at least one SC/VSC deployment during the race),
+#   sourced from F1.com's own "Need to Know" per-race statistics (trailing ~5-10 race window)
+#   where available, otherwise estimated from circuit geometry (wall-lined street circuits =
+#   high, modern run-off-heavy circuits = low). THESE ARE APPROXIMATIONS — update them each
+#   season from F1.com's pre-race "Need to Know" articles for the sharpest calibration.
+# - pit_loss_base: typical total pit-lane time loss in seconds (entry + stationary + exit),
+#   again sourced from F1.com where available.
 TRACK_CHARACTERISTICS = {
     # HIGH DOWNFORCE — slow corners, heavy aero dependency
-    'Monaco':        {'df_type': 'HIGH_DF', 'turn_1_chaos': 0.060, 'tow_factor': 0.00, 'overtaking_diff': 1.00},
-    'Singapore':     {'df_type': 'HIGH_DF', 'turn_1_chaos': 0.070, 'tow_factor': 0.05, 'overtaking_diff': 0.85},
-    'Imola':         {'df_type': 'HIGH_DF', 'turn_1_chaos': 0.040, 'tow_factor': 0.10, 'overtaking_diff': 0.85},
-    'Emilia Romagna':{'df_type': 'HIGH_DF', 'turn_1_chaos': 0.040, 'tow_factor': 0.10, 'overtaking_diff': 0.85},
-    'Hungary':       {'df_type': 'HIGH_DF', 'turn_1_chaos': 0.060, 'tow_factor': 0.08, 'overtaking_diff': 0.80},
-    'Zandvoort':     {'df_type': 'HIGH_DF', 'turn_1_chaos': 0.035, 'tow_factor': 0.08, 'overtaking_diff': 0.80},
-    
+    'Monaco':        {'df_type': 'HIGH_DF', 'turn_1_chaos': 0.060, 'tow_factor': 0.00, 'overtaking_diff': 1.00, 'sc_probability': 0.55, 'vsc_probability': 0.20, 'pit_loss_base': 21.5},
+    'Singapore':     {'df_type': 'HIGH_DF', 'turn_1_chaos': 0.070, 'tow_factor': 0.05, 'overtaking_diff': 0.85, 'sc_probability': 0.95, 'vsc_probability': 0.35, 'pit_loss_base': 29.0},
+    'Imola':         {'df_type': 'HIGH_DF', 'turn_1_chaos': 0.040, 'tow_factor': 0.10, 'overtaking_diff': 0.85, 'sc_probability': 0.45, 'vsc_probability': 0.25, 'pit_loss_base': 24.0},
+    'Emilia Romagna':{'df_type': 'HIGH_DF', 'turn_1_chaos': 0.040, 'tow_factor': 0.10, 'overtaking_diff': 0.85, 'sc_probability': 0.45, 'vsc_probability': 0.25, 'pit_loss_base': 24.0},
+    'Hungary':       {'df_type': 'HIGH_DF', 'turn_1_chaos': 0.060, 'tow_factor': 0.08, 'overtaking_diff': 0.80, 'sc_probability': 0.25, 'vsc_probability': 0.25, 'pit_loss_base': 20.6},
+    'Zandvoort':     {'df_type': 'HIGH_DF', 'turn_1_chaos': 0.035, 'tow_factor': 0.08, 'overtaking_diff': 0.80, 'sc_probability': 0.50, 'vsc_probability': 0.30, 'pit_loss_base': 22.0},
+
     # MEDIUM-HIGH DOWNFORCE — narrow or hard to follow
-    'Spain':         {'df_type': 'MEDIUM', 'turn_1_chaos': 0.040, 'tow_factor': 0.12, 'overtaking_diff': 0.70},
-    'Barcelona':     {'df_type': 'MEDIUM', 'turn_1_chaos': 0.040, 'tow_factor': 0.12, 'overtaking_diff': 0.70},
-    'Melbourne':     {'df_type': 'MEDIUM', 'turn_1_chaos': 0.050, 'tow_factor': 0.10, 'overtaking_diff': 0.70},
-    'Japan':         {'df_type': 'MEDIUM', 'turn_1_chaos': 0.045, 'tow_factor': 0.12, 'overtaking_diff': 0.65},
-    'Suzuka':        {'df_type': 'MEDIUM', 'turn_1_chaos': 0.045, 'tow_factor': 0.12, 'overtaking_diff': 0.65},
+    'Spain':         {'df_type': 'MEDIUM', 'turn_1_chaos': 0.040, 'tow_factor': 0.12, 'overtaking_diff': 0.70, 'sc_probability': 0.25, 'vsc_probability': 0.20, 'pit_loss_base': 21.0},
+    'Barcelona':     {'df_type': 'MEDIUM', 'turn_1_chaos': 0.040, 'tow_factor': 0.12, 'overtaking_diff': 0.70, 'sc_probability': 0.25, 'vsc_probability': 0.20, 'pit_loss_base': 21.0},
+    'Melbourne':     {'df_type': 'MEDIUM', 'turn_1_chaos': 0.050, 'tow_factor': 0.10, 'overtaking_diff': 0.70, 'sc_probability': 0.67, 'vsc_probability': 0.50, 'pit_loss_base': 20.1},
+    'Japan':         {'df_type': 'MEDIUM', 'turn_1_chaos': 0.045, 'tow_factor': 0.12, 'overtaking_diff': 0.65, 'sc_probability': 0.30, 'vsc_probability': 0.25, 'pit_loss_base': 21.5},
+    'Suzuka':        {'df_type': 'MEDIUM', 'turn_1_chaos': 0.045, 'tow_factor': 0.12, 'overtaking_diff': 0.65, 'sc_probability': 0.30, 'vsc_probability': 0.25, 'pit_loss_base': 21.5},
 
     # MEDIUM DOWNFORCE — balanced circuits
-    'Silverstone':   {'df_type': 'MEDIUM', 'turn_1_chaos': 0.030, 'tow_factor': 0.10, 'overtaking_diff': 0.50},
-    'Great Britain': {'df_type': 'MEDIUM', 'turn_1_chaos': 0.030, 'tow_factor': 0.10, 'overtaking_diff': 0.50},
-    'Miami':         {'df_type': 'MEDIUM', 'turn_1_chaos': 0.040, 'tow_factor': 0.15, 'overtaking_diff': 0.50},
-    'Saudi Arabia':  {'df_type': 'MEDIUM', 'turn_1_chaos': 0.055, 'tow_factor': 0.18, 'overtaking_diff': 0.45},
-    'Jeddah':        {'df_type': 'MEDIUM', 'turn_1_chaos': 0.055, 'tow_factor': 0.18, 'overtaking_diff': 0.45},
-    'Abu Dhabi':     {'df_type': 'MEDIUM', 'turn_1_chaos': 0.030, 'tow_factor': 0.15, 'overtaking_diff': 0.45},
-    'Yas Marina':    {'df_type': 'MEDIUM', 'turn_1_chaos': 0.030, 'tow_factor': 0.15, 'overtaking_diff': 0.45},
-    'Qatar':         {'df_type': 'MEDIUM', 'turn_1_chaos': 0.045, 'tow_factor': 0.12, 'overtaking_diff': 0.50},
-    'Lusail':        {'df_type': 'MEDIUM', 'turn_1_chaos': 0.045, 'tow_factor': 0.12, 'overtaking_diff': 0.50},
-    'China':         {'df_type': 'MEDIUM', 'turn_1_chaos': 0.035, 'tow_factor': 0.16, 'overtaking_diff': 0.45},
-    'Shanghai':      {'df_type': 'MEDIUM', 'turn_1_chaos': 0.035, 'tow_factor': 0.16, 'overtaking_diff': 0.45},
-    'Austin':        {'df_type': 'MEDIUM', 'turn_1_chaos': 0.060, 'tow_factor': 0.15, 'overtaking_diff': 0.40},
-    'United States': {'df_type': 'MEDIUM', 'turn_1_chaos': 0.060, 'tow_factor': 0.15, 'overtaking_diff': 0.40},
-    
+    'Silverstone':   {'df_type': 'MEDIUM', 'turn_1_chaos': 0.030, 'tow_factor': 0.10, 'overtaking_diff': 0.50, 'sc_probability': 0.40, 'vsc_probability': 0.30, 'pit_loss_base': 21.0},
+    'Great Britain': {'df_type': 'MEDIUM', 'turn_1_chaos': 0.030, 'tow_factor': 0.10, 'overtaking_diff': 0.50, 'sc_probability': 0.40, 'vsc_probability': 0.30, 'pit_loss_base': 21.0},
+    'Miami':         {'df_type': 'MEDIUM', 'turn_1_chaos': 0.040, 'tow_factor': 0.15, 'overtaking_diff': 0.50, 'sc_probability': 0.60, 'vsc_probability': 0.35, 'pit_loss_base': 21.0},
+    'Saudi Arabia':  {'df_type': 'MEDIUM', 'turn_1_chaos': 0.055, 'tow_factor': 0.18, 'overtaking_diff': 0.45, 'sc_probability': 0.55, 'vsc_probability': 0.30, 'pit_loss_base': 22.5},
+    'Jeddah':        {'df_type': 'MEDIUM', 'turn_1_chaos': 0.055, 'tow_factor': 0.18, 'overtaking_diff': 0.45, 'sc_probability': 0.55, 'vsc_probability': 0.30, 'pit_loss_base': 22.5},
+    'Abu Dhabi':     {'df_type': 'MEDIUM', 'turn_1_chaos': 0.030, 'tow_factor': 0.15, 'overtaking_diff': 0.45, 'sc_probability': 0.15, 'vsc_probability': 0.15, 'pit_loss_base': 21.5},
+    'Yas Marina':    {'df_type': 'MEDIUM', 'turn_1_chaos': 0.030, 'tow_factor': 0.15, 'overtaking_diff': 0.45, 'sc_probability': 0.15, 'vsc_probability': 0.15, 'pit_loss_base': 21.5},
+    'Qatar':         {'df_type': 'MEDIUM', 'turn_1_chaos': 0.045, 'tow_factor': 0.12, 'overtaking_diff': 0.50, 'sc_probability': 0.35, 'vsc_probability': 0.25, 'pit_loss_base': 24.5},
+    'Lusail':        {'df_type': 'MEDIUM', 'turn_1_chaos': 0.045, 'tow_factor': 0.12, 'overtaking_diff': 0.50, 'sc_probability': 0.35, 'vsc_probability': 0.25, 'pit_loss_base': 24.5},
+    'China':         {'df_type': 'MEDIUM', 'turn_1_chaos': 0.035, 'tow_factor': 0.16, 'overtaking_diff': 0.45, 'sc_probability': 0.30, 'vsc_probability': 0.20, 'pit_loss_base': 22.0},
+    'Shanghai':      {'df_type': 'MEDIUM', 'turn_1_chaos': 0.035, 'tow_factor': 0.16, 'overtaking_diff': 0.45, 'sc_probability': 0.30, 'vsc_probability': 0.20, 'pit_loss_base': 22.0},
+    'Austin':        {'df_type': 'MEDIUM', 'turn_1_chaos': 0.060, 'tow_factor': 0.15, 'overtaking_diff': 0.40, 'sc_probability': 0.40, 'vsc_probability': 0.25, 'pit_loss_base': 19.5},
+    'United States': {'df_type': 'MEDIUM', 'turn_1_chaos': 0.060, 'tow_factor': 0.15, 'overtaking_diff': 0.40, 'sc_probability': 0.40, 'vsc_probability': 0.25, 'pit_loss_base': 19.5},
+
     # MEDIUM-LOW DOWNFORCE — easier overtaking, heavy braking
-    'Bahrain':       {'df_type': 'MEDIUM', 'turn_1_chaos': 0.045, 'tow_factor': 0.15, 'overtaking_diff': 0.35},
-    'Austria':       {'df_type': 'MEDIUM', 'turn_1_chaos': 0.055, 'tow_factor': 0.15, 'overtaking_diff': 0.35},
-    'São Paulo':     {'df_type': 'MEDIUM', 'turn_1_chaos': 0.045, 'tow_factor': 0.15, 'overtaking_diff': 0.35},
-    'Brazil':        {'df_type': 'MEDIUM', 'turn_1_chaos': 0.045, 'tow_factor': 0.15, 'overtaking_diff': 0.35},
-    'Mexico':        {'df_type': 'MEDIUM', 'turn_1_chaos': 0.080, 'tow_factor': 0.20, 'overtaking_diff': 0.40},
+    'Bahrain':       {'df_type': 'MEDIUM', 'turn_1_chaos': 0.045, 'tow_factor': 0.15, 'overtaking_diff': 0.35, 'sc_probability': 0.20, 'vsc_probability': 0.20, 'pit_loss_base': 22.0},
+    'Austria':       {'df_type': 'MEDIUM', 'turn_1_chaos': 0.055, 'tow_factor': 0.15, 'overtaking_diff': 0.35, 'sc_probability': 0.35, 'vsc_probability': 0.25, 'pit_loss_base': 19.5},
+    'São Paulo':     {'df_type': 'MEDIUM', 'turn_1_chaos': 0.045, 'tow_factor': 0.15, 'overtaking_diff': 0.35, 'sc_probability': 0.50, 'vsc_probability': 0.30, 'pit_loss_base': 20.5},
+    'Brazil':        {'df_type': 'MEDIUM', 'turn_1_chaos': 0.045, 'tow_factor': 0.15, 'overtaking_diff': 0.35, 'sc_probability': 0.50, 'vsc_probability': 0.30, 'pit_loss_base': 20.5},
+    'Mexico':        {'df_type': 'MEDIUM', 'turn_1_chaos': 0.080, 'tow_factor': 0.20, 'overtaking_diff': 0.40, 'sc_probability': 0.45, 'vsc_probability': 0.25, 'pit_loss_base': 22.0},
 
     # LOW DOWNFORCE — power tracks, long straights, slipstream city
-    'Canada':        {'df_type': 'LOW_DF', 'turn_1_chaos': 0.035, 'tow_factor': 0.15, 'overtaking_diff': 0.35},
-    'Canadian':      {'df_type': 'LOW_DF', 'turn_1_chaos': 0.035, 'tow_factor': 0.15, 'overtaking_diff': 0.35},
-    'Montreal':      {'df_type': 'LOW_DF', 'turn_1_chaos': 0.035, 'tow_factor': 0.15, 'overtaking_diff': 0.35},
-    'Baku':          {'df_type': 'LOW_DF', 'turn_1_chaos': 0.065, 'tow_factor': 0.28, 'overtaking_diff': 0.30},
-    'Azerbaijan':    {'df_type': 'LOW_DF', 'turn_1_chaos': 0.065, 'tow_factor': 0.28, 'overtaking_diff': 0.30},
-    'Monza':         {'df_type': 'LOW_DF', 'turn_1_chaos': 0.080, 'tow_factor': 0.30, 'overtaking_diff': 0.30},
-    'Italy':         {'df_type': 'LOW_DF', 'turn_1_chaos': 0.080, 'tow_factor': 0.30, 'overtaking_diff': 0.30},
-    'Spa':           {'df_type': 'LOW_DF', 'turn_1_chaos': 0.070, 'tow_factor': 0.22, 'overtaking_diff': 0.25},
-    'Belgium':       {'df_type': 'LOW_DF', 'turn_1_chaos': 0.070, 'tow_factor': 0.22, 'overtaking_diff': 0.25},
-    'Las Vegas':     {'df_type': 'LOW_DF', 'turn_1_chaos': 0.050, 'tow_factor': 0.30, 'overtaking_diff': 0.20},
+    'Canada':        {'df_type': 'LOW_DF', 'turn_1_chaos': 0.035, 'tow_factor': 0.15, 'overtaking_diff': 0.35, 'sc_probability': 0.65, 'vsc_probability': 0.30, 'pit_loss_base': 20.5},
+    'Canadian':      {'df_type': 'LOW_DF', 'turn_1_chaos': 0.035, 'tow_factor': 0.15, 'overtaking_diff': 0.35, 'sc_probability': 0.65, 'vsc_probability': 0.30, 'pit_loss_base': 20.5},
+    'Montreal':      {'df_type': 'LOW_DF', 'turn_1_chaos': 0.035, 'tow_factor': 0.15, 'overtaking_diff': 0.35, 'sc_probability': 0.65, 'vsc_probability': 0.30, 'pit_loss_base': 20.5},
+    'Baku':          {'df_type': 'LOW_DF', 'turn_1_chaos': 0.065, 'tow_factor': 0.28, 'overtaking_diff': 0.30, 'sc_probability': 0.65, 'vsc_probability': 0.30, 'pit_loss_base': 20.0},
+    'Azerbaijan':    {'df_type': 'LOW_DF', 'turn_1_chaos': 0.065, 'tow_factor': 0.28, 'overtaking_diff': 0.30, 'sc_probability': 0.65, 'vsc_probability': 0.30, 'pit_loss_base': 20.0},
+    'Monza':         {'df_type': 'LOW_DF', 'turn_1_chaos': 0.080, 'tow_factor': 0.30, 'overtaking_diff': 0.30, 'sc_probability': 0.50, 'vsc_probability': 0.38, 'pit_loss_base': 23.7},
+    'Italy':         {'df_type': 'LOW_DF', 'turn_1_chaos': 0.080, 'tow_factor': 0.30, 'overtaking_diff': 0.30, 'sc_probability': 0.50, 'vsc_probability': 0.38, 'pit_loss_base': 23.7},
+    'Spa':           {'df_type': 'LOW_DF', 'turn_1_chaos': 0.070, 'tow_factor': 0.22, 'overtaking_diff': 0.25, 'sc_probability': 0.55, 'vsc_probability': 0.30, 'pit_loss_base': 21.0},
+    'Belgium':       {'df_type': 'LOW_DF', 'turn_1_chaos': 0.070, 'tow_factor': 0.22, 'overtaking_diff': 0.25, 'sc_probability': 0.55, 'vsc_probability': 0.30, 'pit_loss_base': 21.0},
+    'Las Vegas':     {'df_type': 'LOW_DF', 'turn_1_chaos': 0.050, 'tow_factor': 0.30, 'overtaking_diff': 0.20, 'sc_probability': 0.40, 'vsc_probability': 0.25, 'pit_loss_base': 20.0},
+}
+
+_DEFAULT_TRACK_INFO = {
+    'df_type': 'MEDIUM', 'turn_1_chaos': 0.03, 'tow_factor': 0.1, 'overtaking_diff': 0.5,
+    'sc_probability': 0.35, 'vsc_probability': 0.25, 'pit_loss_base': 22.0,
 }
 
 def _get_track_type(event_name):
@@ -163,7 +175,7 @@ def _get_track_type(event_name):
     for key, info in TRACK_CHARACTERISTICS.items():
         if key.lower() in name.lower():
             return info
-    return {'df_type': 'MEDIUM', 'turn_1_chaos': 0.03, 'tow_factor': 0.1, 'overtaking_diff': 0.5}
+    return dict(_DEFAULT_TRACK_INFO)
 
 def _track_similarity_weight(type_a, type_b):
     """
@@ -189,6 +201,11 @@ def extract_season_trends(year, current_race):
     
     Historical races are weighted by track type similarity to the current race:
       Same type = 1.5x, Adjacent = 1.0x, Opposite = 0.5x.
+
+    Returns:
+        (season_trends, team_trends) — season_trends is dict[driver] -> {...},
+        team_trends is dict[team_name] -> {...} (aggregated across that team's
+        drivers), used as the "known current form" prior for sandbag detection.
     """
     try:
         current_event = fastf1.get_event(year, current_race)
@@ -196,7 +213,7 @@ def extract_season_trends(year, current_race):
         current_track_info = _get_track_type(current_event['EventName'])
         current_track_type = current_track_info['df_type']
     except Exception:
-        return {}
+        return {}, {}
 
     races_to_fetch = []
     r = current_round - 1
@@ -250,13 +267,18 @@ def extract_season_trends(year, current_race):
             drivers = pd.unique(q_laps['Driver'])
             q_paces = {}
             r_paces = {}
-            
+            drv_team = {}
+
             # Quali pace
             for drv in drivers:
                 drv_laps = q_laps[q_laps['Driver'] == drv]
                 fastest = drv_laps.pick_fastest()
                 if not pd.isnull(fastest['LapTime']):
                     q_paces[drv] = fastest['LapTime'].total_seconds()
+                if 'Team' in drv_laps.columns and len(drv_laps) > 0:
+                    team_val = drv_laps['Team'].iloc[0]
+                    if pd.notna(team_val):
+                        drv_team[drv] = str(team_val)
             
             if not q_paces: continue
             pole_pace = min(q_paces.values())
@@ -291,16 +313,18 @@ def extract_season_trends(year, current_race):
                     sunday_conv = q_delta - r_delta
                     
                     if drv not in driver_stats:
-                        driver_stats[drv] = {'conversions': [], 'r_deltas': [], 'q_deltas': [], 'weights': []}
+                        driver_stats[drv] = {'conversions': [], 'r_deltas': [], 'q_deltas': [], 'weights': [], 'team': drv_team.get(drv)}
                     driver_stats[drv]['conversions'].append(sunday_conv)
                     driver_stats[drv]['r_deltas'].append(r_delta)
                     driver_stats[drv]['q_deltas'].append(q_delta)
                     driver_stats[drv]['weights'].append(weight)
-                    
+                    if driver_stats[drv].get('team') is None:
+                        driver_stats[drv]['team'] = drv_team.get(drv)
+
         except Exception as e:
             continue
 
-    # Weighted Aggregate
+    # Weighted Aggregate (per driver)
     season_trends = {}
     for drv, stats in driver_stats.items():
         if len(stats['conversions']) > 0:
@@ -315,10 +339,33 @@ def extract_season_trends(year, current_race):
             season_trends[drv] = {
                 'sunday_conversion': avg_conv, # Positive = better on Sunday
                 'power_rank_delta': avg_r_delta, # Lower = faster race pace
-                'quali_power_rank': avg_q_delta # Lower = faster qualifying pace
+                'quali_power_rank': avg_q_delta, # Lower = faster qualifying pace
+                'team': stats.get('team'),
             }
-            
-    return season_trends
+
+    # ── Team-level aggregate ───────────────────────────────────────────
+    # This is the "known current form" prior used for sandbagging detection:
+    # if a team's FP/Quali pace this weekend is wildly worse than what both
+    # of their cars have actually been doing on-track in recent races, that's
+    # a signal the session pace isn't representative (fuel loads, programme,
+    # sandbagging) rather than a genuine drop in competitiveness.
+    team_groups = {}
+    for drv, stats in season_trends.items():
+        team = stats.get('team')
+        if not team:
+            continue
+        team_groups.setdefault(team, []).append(stats)
+
+    team_trends = {}
+    for team, entries in team_groups.items():
+        team_trends[team] = {
+            'power_rank_delta': float(np.mean([e['power_rank_delta'] for e in entries])),
+            'quali_power_rank': float(np.mean([e['quali_power_rank'] for e in entries])),
+            'sunday_conversion': float(np.mean([e['sunday_conversion'] for e in entries])),
+            'num_drivers': len(entries),
+        }
+
+    return season_trends, team_trends
 
 
 # ── Lap filter ─────────────────────────────────────────────────────────────
@@ -333,6 +380,57 @@ def filter_laps(laps):
 
 
 # ── Qualifying extractor (Theoretical Best) ────────────────────────────────
+# ── Tow / Slipstream Detection ──────────────────────────────────────────────
+def detect_tow_assisted_laps(session, z_threshold=1.75, tow_time_per_std=0.06, max_estimate=0.4):
+    """
+    Flags a driver's fastest lap as tow-assisted if its speed-trap reading is
+    an outlier relative to THAT DRIVER'S OWN other laps in the same session
+    (deliberately not a field comparison — a genuinely fast car is fast on
+    every lap, a big slipstream is a one-lap spike). This is the direct fix
+    for the "Hadjar towed Verstappen to P2 at Spa" scenario: a big draft can
+    make a single lap look like genuine pace when it isn't repeatable.
+
+    Works on ANY session with speed-trap columns (FP3 for the simulated-quali
+    path, or a real Qualifying session when one has already happened).
+
+    Returns:
+        dict[driver] -> float estimated seconds of lap-time inflation from
+        the tow (0.0 / absent if nothing flagged). This is a rough heuristic,
+        not a precise physical estimate — it's meant to widen uncertainty
+        around a suspect lap, not to surgically rewrite it.
+    """
+    tow_flags = {}
+    if session is None or session.laps is None or len(session.laps) == 0:
+        return tow_flags
+
+    try:
+        filtered_laps = filter_laps(session.laps)
+    except Exception:
+        filtered_laps = session.laps
+
+    speed_col = next((c for c in ['SpeedST', 'SpeedFL', 'SpeedI2', 'SpeedI1']
+                       if c in filtered_laps.columns), None)
+    if speed_col is None:
+        return tow_flags
+
+    for driver in pd.unique(filtered_laps['Driver']):
+        driver_laps = filtered_laps.pick_drivers(driver).dropna(subset=['LapTime', speed_col])
+        if len(driver_laps) < 4:
+            continue
+
+        speeds = driver_laps[speed_col].values.astype(float)
+        times = driver_laps['LapTime'].dt.total_seconds().values
+        spd_mean = np.mean(speeds)
+        spd_std = max(np.std(speeds), 1.0)
+
+        fastest_idx = int(np.argmin(times))
+        z = (speeds[fastest_idx] - spd_mean) / spd_std
+        if z > z_threshold:
+            tow_flags[driver] = float(np.clip(z * tow_time_per_std, 0.0, max_estimate))
+
+    return tow_flags
+
+
 def extract_quali_stats(session):
     """
     Builds qualifying sector statistics using a *Theoretical Best Lap* method.
@@ -342,16 +440,29 @@ def extract_quali_stats(session):
       2. Keep only the top 10 % fastest laps (by total lap time) to isolate
          genuine push-lap pace and discard cool-down / aero-rake runs.
       3. From that elite subset, record the **minimum** sector time for S1,
-         S2, S3 (the theoretical best sectors).
+         S2, S3 (the theoretical best sectors) — EXCLUDING any lap flagged
+         as tow-assisted (see detect_tow_assisted_laps) wherever an
+         un-flagged alternative exists in the elite set.
       4. σ is derived from the spread within that elite subset so the Monte
          Carlo draws stay tightly bounded around realistic qualifying pace.
+      5. If the driver's overall fastest lap was tow-flagged, partially
+         discount the theoretical best pace by the estimated tow inflation
+         (spread evenly across the three sectors, since we can't attribute
+         the tow to a specific sector from speed-trap data alone).
 
     Returns:
-        dict[driver] -> {S1_mean, S1_std, S2_mean, S2_std, S3_mean, S3_std}
+        (quali_stats, tow_flags) — quali_stats is dict[driver] -> {S1_mean,
+        S1_std, S2_mean, S2_std, S3_mean, S3_std}; tow_flags is dict[driver]
+        -> estimated seconds of lap-time inflation from a detected tow.
     """
     laps = session.laps
     filtered_laps = filter_laps(laps)
     drivers = pd.unique(filtered_laps['Driver'])
+
+    tow_flags = detect_tow_assisted_laps(session)
+
+    speed_col = next((c for c in ['SpeedST', 'SpeedFL', 'SpeedI2', 'SpeedI1']
+                       if c in filtered_laps.columns), None)
 
     quali_stats = {}
 
@@ -369,6 +480,7 @@ def extract_quali_stats(session):
         s2 = driver_laps['Sector2Time'].dt.total_seconds().values
         s3 = driver_laps['Sector3Time'].dt.total_seconds().values
         total = driver_laps['LapTime'].dt.total_seconds().values
+        speeds = driver_laps[speed_col].values.astype(float) if speed_col else None
 
         # Keep only top-10 % fastest laps (at least 2 laps)
         cutoff = max(2, int(np.ceil(len(total) * 0.10)))
@@ -378,19 +490,50 @@ def extract_quali_stats(session):
         s2_elite = s2[elite_idx]
         s3_elite = s3[elite_idx]
 
-        # Theoretical best = minimum of each sector in the elite set
+        # ── Exclude tow-outlier laps from the elite pool where possible ──
+        # A big draft shows up as an outlier-high speed-trap reading versus
+        # this SAME driver's other elite-set laps. If we can drop it and
+        # still have laps left, do so rather than let it set the "theoretical
+        # best" for a sector it didn't earn on pure pace.
+        if speeds is not None:
+            elite_speeds = speeds[elite_idx]
+            valid = ~np.isnan(elite_speeds)
+            if valid.sum() >= 3:
+                e_mean = np.mean(elite_speeds[valid])
+                e_std = max(np.std(elite_speeds[valid]), 1.0)
+                z_scores = np.where(valid, (elite_speeds - e_mean) / e_std, 0.0)
+                is_outlier = z_scores > 1.75
+                if np.any(is_outlier) and np.any(~is_outlier):
+                    keep = ~is_outlier
+                    s1_elite, s2_elite, s3_elite = s1_elite[keep], s2_elite[keep], s3_elite[keep]
+
+        # Theoretical best = minimum of each sector in the (tow-filtered) elite set
         # σ = std of the elite set (captures natural driver variance on push laps)
         # Floor σ at 0.05 s to avoid degenerate zero-variance draws
+        s1_mean = float(np.min(s1_elite))
+        s2_mean = float(np.min(s2_elite))
+        s3_mean = float(np.min(s3_elite))
+
+        # If the driver's single fastest lap overall was tow-flagged, that
+        # inflation likely still leaked into whichever sector holds the
+        # straight — partially discount it since we can't isolate the exact
+        # sector from speed-trap data alone.
+        if driver in tow_flags:
+            per_sector = tow_flags[driver] / 3.0
+            s1_mean += per_sector
+            s2_mean += per_sector
+            s3_mean += per_sector
+
         quali_stats[driver] = {
-            'S1_mean': float(np.min(s1_elite)),
+            'S1_mean': s1_mean,
             'S1_std':  float(max(np.std(s1_elite), 0.05)),
-            'S2_mean': float(np.min(s2_elite)),
+            'S2_mean': s2_mean,
             'S2_std':  float(max(np.std(s2_elite), 0.05)),
-            'S3_mean': float(np.min(s3_elite)),
+            'S3_mean': s3_mean,
             'S3_std':  float(max(np.std(s3_elite), 0.05)),
         }
 
-    return quali_stats
+    return quali_stats, tow_flags
 
 
 # ── Race-pace / degradation extractor ──────────────────────────────────────
@@ -435,6 +578,7 @@ def extract_race_pace_and_deg(session):
     for driver in drivers:
         driver_laps = raw_laps[raw_laps['Driver'] == driver]
         driver_stats = {}
+        driver_stint_pool = {}  # compound -> list of {base_pace, deg_slope, n_laps}
 
         # Record the driver's fastest clean lap (for fallback)
         lap_times_all = driver_laps['LapTime'].dt.total_seconds().dropna()
@@ -516,10 +660,44 @@ def extract_race_pace_and_deg(session):
             if fastest_lap and base_pace > fastest_lap * 1.08:
                 continue
 
-            # Keep the most representative run per compound (lowest base)
-            if compound not in driver_stats or base_pace < driver_stats[compound]['base_pace']:
-                driver_stats[compound] = {'base_pace': float(base_pace), 'deg_slope': float(deg_slope)}
-                field_pace.setdefault(compound, []).append(base_pace)
+            # ── Accumulate this stint (don't cherry-pick yet) ──────────
+            # NOTE: we deliberately do NOT keep "whichever stint is fastest"
+            # here. That was the previous behaviour, and it's exactly the
+            # bug that lets a backmarker team's short, deliberately
+            # light-fuel long-run make their race pace look better than it
+            # really is: if you always keep the fastest of several stints,
+            # you're systematically biased toward whichever stint happened
+            # to be on the least fuel. Instead we keep every valid stint and
+            # combine them below, weighted toward longer runs — a 15+ lap
+            # stint is much harder to fake on light fuel than a 7-9 lap one,
+            # so it should count for more.
+            n_laps = len(x_clean)
+            driver_stint_pool.setdefault(compound, []).append(
+                {'base_pace': float(base_pace), 'deg_slope': float(deg_slope), 'n_laps': n_laps}
+            )
+
+        for compound, entries in driver_stint_pool.items():
+            n_arr = np.array([e['n_laps'] for e in entries], dtype=float)
+            pace_arr = np.array([e['base_pace'] for e in entries])
+            deg_arr = np.array([e['deg_slope'] for e in entries])
+            # Credibility weighting: a stint of 12+ laps is treated as a
+            # confirmed race-fuel-equivalent run and counts double per lap;
+            # shorter stints (7-11 laps) still count, just proportionally less.
+            weights = np.where(n_arr >= 12, n_arr * 2.0, n_arr)
+
+            combined_pace = float(np.average(pace_arr, weights=weights))
+            combined_deg = float(np.average(deg_arr, weights=weights))
+            total_laps = int(n_arr.sum())
+            longest_stint = int(n_arr.max())
+
+            driver_stats[compound] = {
+                'base_pace': combined_pace,
+                'deg_slope': combined_deg,
+                'sample_laps': total_laps,
+                'longest_stint': longest_stint,
+                'num_stints': len(entries),
+            }
+            field_pace.setdefault(compound, []).append(combined_pace)
 
         if driver_stats:
             raw_stats[driver] = driver_stats
@@ -576,6 +754,9 @@ def extract_race_pace_and_deg(session):
                 filled[target] = {
                     'base_pace': stats[source]['base_pace'] + delta,
                     'deg_slope': stats[source]['deg_slope'],
+                    'sample_laps': 0,  # projected from another compound, not directly observed
+                    'longest_stint': 0,
+                    'num_stints': 0,
                 }
                 
         race_stats[driver] = filled
@@ -607,6 +788,9 @@ def extract_race_pace_and_deg(session):
             filled[compound] = {
                 'base_pace': base_soft + COMPOUND_OFFSETS[compound],
                 'deg_slope': median_deg,
+                'sample_laps': 0,
+                'longest_stint': 0,
+                'num_stints': 0,
             }
         race_stats[driver] = filled
 
@@ -742,6 +926,266 @@ def extract_reliability_stats(year, current_race):
     reliability_stats['__ROOKIE_FALLBACK__'] = max(rookie_penalty, 0.0001)
 
     return reliability_stats
+
+
+# ── Straight-line Speed / Power-Unit Deployment Index ──────────────────────
+def extract_speed_metrics(session):
+    """
+    Extracts each driver's straight-line speed advantage (or deficit) relative
+    to the field, using FastF1's built-in speed-trap columns (SpeedST, SpeedFL,
+    SpeedI1, SpeedI2 — already present on session.laps, no telemetry pull needed).
+
+    Under 2026 regs, energy deployment / battery management is a much bigger
+    differentiator than outright downforce on power-sensitive circuits, so a
+    car that is consistently faster in a straight line than its cornering pace
+    would suggest (the "Kimi at Spa" case) shows up here as a positive index.
+
+    Returns:
+        dict[driver] -> float power_index (z-score vs field, positive = faster
+        in a straight line than the field average). 0.0 if no data.
+    """
+    if session is None or session.laps is None or len(session.laps) == 0:
+        return {}
+
+    laps = session.laps
+    speed_cols = [c for c in ['SpeedST', 'SpeedFL', 'SpeedI1', 'SpeedI2'] if c in laps.columns]
+    if not speed_cols:
+        return {}
+
+    drivers = pd.unique(laps['Driver'])
+    driver_top_speed = {}
+
+    for drv in drivers:
+        drv_laps = laps[laps['Driver'] == drv]
+        vals = []
+        for col in speed_cols:
+            col_vals = drv_laps[col].dropna()
+            if len(col_vals) > 0:
+                # Use the 90th percentile rather than max to avoid tow-inflated outliers
+                vals.append(float(np.percentile(col_vals, 90)))
+        if vals:
+            driver_top_speed[drv] = float(np.mean(vals))
+
+    if len(driver_top_speed) < 3:
+        return {}
+
+    speeds = np.array(list(driver_top_speed.values()))
+    field_mean = np.mean(speeds)
+    field_std = max(np.std(speeds), 0.5)  # floor to avoid div-by-zero on freak-identical data
+
+    power_index = {
+        drv: float((spd - field_mean) / field_std)
+        for drv, spd in driver_top_speed.items()
+    }
+    return power_index
+
+
+# ── Team Pit Stop Performance Extractor ────────────────────────────────────
+def extract_pitstop_stats(year, current_race, track_pit_loss_base=22.0):
+    """
+    Extracts team-specific pit-lane time loss from the 5 preceding races, using
+    each stop's (PitOutTime - PitInTime) as the total pit-lane loss for that
+    stop. Values are normalised against each historical race's own field median
+    (since pit-lane length/speed-limit varies enormously by circuit) then
+    re-anchored onto the CURRENT circuit's expected pit loss.
+
+    Also estimates a per-team "botched stop" probability from how often a
+    team's stop was a statistical outlier (>1.8x the IQR above their own
+    median) in that window — a crude proxy for pit-crew reliability.
+
+    Returns:
+        dict[team_name] -> {'pit_loss': float seconds, 'botch_prob': float}
+        Always includes a '__FIELD__' fallback key for unmapped teams.
+    """
+    try:
+        current_event = fastf1.get_event(year, current_race)
+        current_round = current_event['RoundNumber']
+    except Exception:
+        return {'__FIELD__': {'pit_loss': track_pit_loss_base, 'botch_prob': 0.06}}
+
+    races_to_fetch = []
+    r = current_round - 1
+    y = year
+    while len(races_to_fetch) < 5:
+        if r > 0:
+            races_to_fetch.append((y, r))
+            r -= 1
+        else:
+            y -= 1
+            try:
+                prev_schedule = fastf1.get_event_schedule(y)
+                r = prev_schedule['RoundNumber'].max()
+            except Exception:
+                break
+
+    team_deltas = {}  # team -> list of (stop_time - race_median)
+
+    for (fetch_year, fetch_round) in races_to_fetch:
+        try:
+            s = fastf1.get_session(fetch_year, fetch_round, 'R')
+            s.load(telemetry=False, weather=False, messages=False)
+            laps = s.laps
+            if laps is None or len(laps) == 0 or 'PitInTime' not in laps.columns:
+                continue
+
+            race_stop_times = []
+            stops_this_race = []  # (team, stop_time)
+
+            for drv in pd.unique(laps['Driver']):
+                drv_laps = laps[laps['Driver'] == drv].sort_values('LapNumber')
+                team_val = drv_laps['Team'].iloc[0] if 'Team' in drv_laps.columns and len(drv_laps) else None
+                pit_in_rows = drv_laps[drv_laps['PitInTime'].notna()]
+
+                for idx in pit_in_rows.index:
+                    pit_in_t = drv_laps.loc[idx, 'PitInTime']
+                    later = drv_laps[drv_laps.index > idx]
+                    out_rows = later[later['PitOutTime'].notna()]
+                    if len(out_rows) == 0:
+                        continue
+                    pit_out_t = out_rows.iloc[0]['PitOutTime']
+                    try:
+                        stop_time = (pit_out_t - pit_in_t).total_seconds()
+                    except Exception:
+                        continue
+                    # Sanity bound: real stops are 15-45s; anything else is a
+                    # red flag / long pit-lane closure artifact, not a normal stop
+                    if 15.0 <= stop_time <= 45.0 and team_val:
+                        race_stop_times.append(stop_time)
+                        stops_this_race.append((str(team_val), stop_time))
+
+            if len(race_stop_times) < 4:
+                continue
+            race_median = float(np.median(race_stop_times))
+            race_q1, race_q3 = np.percentile(race_stop_times, [25, 75])
+            race_iqr = max(race_q3 - race_q1, 0.3)
+
+            for team, stop_time in stops_this_race:
+                team_deltas.setdefault(team, []).append(stop_time - race_median)
+                # Track outliers for botch-rate estimate
+                team_deltas.setdefault(team + '__outlier_flags', [])
+                is_outlier = stop_time > (race_q3 + 1.8 * race_iqr)
+                team_deltas[team + '__outlier_flags'].append(is_outlier)
+
+        except Exception:
+            continue
+
+    pitstop_stats = {}
+    all_deltas = []
+    for key, vals in team_deltas.items():
+        if key.endswith('__outlier_flags'):
+            continue
+        if len(vals) >= 3:
+            all_deltas.extend(vals)
+
+    for team in [k for k in team_deltas.keys() if not k.endswith('__outlier_flags')]:
+        deltas = team_deltas[team]
+        flags = team_deltas.get(team + '__outlier_flags', [])
+        if len(deltas) < 3:
+            continue
+        team_delta = float(np.median(deltas))
+        # Clamp: no team should be modeled as more than +/-1.2s off the field
+        team_delta = float(np.clip(team_delta, -1.2, 1.2))
+        botch_prob = float(np.clip((sum(flags) / len(flags)) if flags else 0.05, 0.02, 0.25))
+        pitstop_stats[team] = {
+            'pit_loss': track_pit_loss_base + team_delta,
+            'botch_prob': botch_prob,
+        }
+
+    pitstop_stats['__FIELD__'] = {'pit_loss': track_pit_loss_base, 'botch_prob': 0.06}
+    return pitstop_stats
+
+
+# ── Team-Level Sandbagging Correction ──────────────────────────────────────
+def apply_team_sandbag_correction(quali_stats, race_stats, team_mapping, team_trends,
+                                   session_label='FP3', blend=0.5, threshold=0.35):
+    """
+    Detects a systematic team-level anomaly: BOTH of a team's cars showing a
+    session pace much worse than that team's actual recent-race form would
+    predict. A single driver having a scruffy session is normal variance; both
+    cars of a leading team being 6th/8th tenths off is much more likely to be
+    fuel loads / programme work / deliberate sandbagging than a genuine form
+    collapse — so we blend the extracted pace partway back toward the team's
+    known recent form rather than trusting the raw session data at face value.
+
+    This is a heuristic, not a certainty — it only fires when the anomaly is
+    large AND consistent across both cars of the same team, and it only ever
+    partially corrects (blend=0.5 by default), never fully overrides the data.
+
+    Args:
+        quali_stats: dict[driver] -> {S1_mean, ...} from extract_quali_stats (mutated copy returned)
+        race_stats: dict[driver] -> {compound -> {...}} from extract_race_pace_and_deg (mutated copy returned)
+        team_mapping: dict[driver] -> {'team': str, 'color': str}
+        team_trends: dict[team] -> {'power_rank_delta': ..., 'quali_power_rank': ...} from extract_season_trends
+        session_label: which session fed race_stats/quali_stats ('FP1' is noisiest, trusted least)
+        blend: how strongly to pull toward the team's known form (0=ignore session, 1=trust session fully)
+        threshold: minimum seconds of anomaly (vs field-best) before a correction fires
+
+    Returns:
+        (corrected_quali_stats, corrected_race_stats, flags) where flags is a
+        list of human-readable strings describing any corrections applied.
+    """
+    flags = []
+    if not team_mapping or not team_trends:
+        return quali_stats, race_stats, flags
+
+    # FP1 pace is the least trustworthy (setup work, fuel sims, new-part testing)
+    # so we blend harder toward the prior there than for FP2/FP3/Quali data.
+    session_trust = {'FP1': 0.35, 'FP2': 0.55, 'FP3': 0.65, 'Q': 0.8, 'SQ': 0.6, 'S': 0.55}
+    effective_blend = blend * session_trust.get(session_label, 0.5) / 0.55
+
+    # Group drivers by team
+    teams = {}
+    for drv, info in team_mapping.items():
+        teams.setdefault(info.get('team', 'Unknown'), []).append(drv)
+
+    # ── Quali sandbagging check ────────────────────────────────────────
+    if quali_stats:
+        totals = {d: (s['S1_mean'] + s['S2_mean'] + s['S3_mean']) for d, s in quali_stats.items()}
+        if totals:
+            best = min(totals.values())
+            for team, drvs in teams.items():
+                team_drvs = [d for d in drvs if d in totals]
+                if len(team_drvs) < 2 or team not in team_trends:
+                    continue
+                actual_gaps = [totals[d] - best for d in team_drvs]
+                expected_gap = team_trends[team]['quali_power_rank']
+                # Both cars anomalously slow vs their known form?
+                if min(actual_gaps) - expected_gap > threshold:
+                    correction = (min(actual_gaps) - expected_gap) * effective_blend
+                    per_sector = correction / 3.0
+                    for d in team_drvs:
+                        quali_stats[d]['S1_mean'] -= per_sector
+                        quali_stats[d]['S2_mean'] -= per_sector
+                        quali_stats[d]['S3_mean'] -= per_sector
+                    flags.append(
+                        f"Quali: {team} both cars ~{min(actual_gaps):.2f}s off pole vs. "
+                        f"expected ~{expected_gap:.2f}s from recent form — pace blended "
+                        f"{correction:.2f}s faster (possible sandbagging/fuel-load effect)."
+                    )
+
+    # ── Race-pace sandbagging check (SOFT compound as the common reference) ──
+    if race_stats:
+        soft_paces = {d: s['SOFT']['base_pace'] for d, s in race_stats.items() if 'SOFT' in s}
+        if soft_paces:
+            best_r = min(soft_paces.values())
+            for team, drvs in teams.items():
+                team_drvs = [d for d in drvs if d in soft_paces]
+                if len(team_drvs) < 2 or team not in team_trends:
+                    continue
+                actual_gaps = [soft_paces[d] - best_r for d in team_drvs]
+                expected_gap = team_trends[team]['power_rank_delta']
+                if min(actual_gaps) - expected_gap > threshold:
+                    correction = (min(actual_gaps) - expected_gap) * effective_blend
+                    for d in team_drvs:
+                        for compound in race_stats[d]:
+                            race_stats[d][compound]['base_pace'] -= correction
+                    flags.append(
+                        f"Race pace: {team} both cars ~{min(actual_gaps):.2f}s off the fastest "
+                        f"long-run vs. expected ~{expected_gap:.2f}s from recent form — pace "
+                        f"blended {correction:.2f}s faster (possible sandbagging)."
+                    )
+
+    return quali_stats, race_stats, flags
 
 
 if __name__ == "__main__":
