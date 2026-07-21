@@ -117,6 +117,14 @@ def run_race_sim(
             pidx = power_index.get(d, 0.0)
             base_pace[i] -= pidx * tow_factor * POWER_INDEX_SCALE
 
+    # ── Direct Race-Pace Tow Penalty ──────────────────────────────────
+    if tow_flags:
+        for i, d in enumerate(drivers):
+            tow_penalty = tow_flags.get(d, 0.0)
+            if tow_penalty > 0.0:
+                # A qualifying slipstream does not exist on clean-air race laps
+                base_pace[i] += tow_penalty
+
     # ── Qualifying Pace Anchor ─────────────────────────────────────────
     # Free Practice 2 lap times are notoriously distorted by unknown fuel loads.
     # To prevent backmarkers (who ran low-fuel FP2 sims) from beating Pole sitters, 
