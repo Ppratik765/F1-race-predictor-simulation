@@ -415,7 +415,7 @@ def detect_tow_assisted_laps(session, z_threshold=1.75, tow_time_per_std=0.06, m
 
     for driver in pd.unique(filtered_laps['Driver']):
         driver_laps = filtered_laps.pick_drivers(driver).dropna(subset=['LapTime', speed_col])
-        if len(driver_laps) < 4:
+        if len(driver_laps) < 3:
             continue
 
         speeds = driver_laps[speed_col].values.astype(float)
@@ -799,39 +799,58 @@ def extract_race_pace_and_deg(session):
 # ── Real qualifying grid extractor ─────────────────────────────────────────
 def extract_real_grid(quali_session):
     """
-    Pulls the actual qualifying grid from a loaded Qualifying session.
+    Pulls the actual qualifying grid from a loaded Qualifying or Race session.
 
     Uses session.results which contains 'Abbreviation' and 'GridPosition'
-    (or 'Position') for every driver who participated.
+    (or 'Position') for every driver who participated. FastF1 sets GridPosition=0 
+    for Pit Lane starters.
 
     Returns:
-        dict[driver_abbreviation] -> int grid position  (1 = pole)
-        Returns None if the session has no results.
+        tuple(dict[driver_abbreviation] -> int, list[pitlane_starters])
+        Returns (None, []) if the session has no results.
     """
     try:
         results = quali_session.results
         if results is None or results.empty:
-            return None
+            return None, []
     except Exception:
-        return None
+        return None, []
 
     grid = {}
+    pitlane_starters = []
+    
     for _, row in results.iterrows():
         abbr = row.get('Abbreviation', '')
+        if not abbr:
+            continue
+            
         pos = row.get('GridPosition')
         
-        if pd.isna(pos) or pos == 0:
+        # If GridPosition is 0 or 0.0, they are explicitly a Pit Lane starter in FastF1
+        if pd.notna(pos) and float(pos) == 0.0:
+            pitlane_starters.append(abbr)
+            continue
+            
+        # Fallback to normal position if GridPosition is NaN
+        if pd.isna(pos):
             pos = row.get('Position')
             
-        if abbr and not pd.isna(pos):
+        if pd.notna(pos):
             try:
-                pos_int = int(pos)
+                pos_int = int(float(pos))
                 if pos_int > 0:
                     grid[abbr] = pos_int
             except (ValueError, TypeError):
                 continue
+                
+    # Assign pitlane starters to virtual slots at the back of the grid to keep NumPy arrays valid
+    if grid and pitlane_starters:
+        current_max = max(grid.values())
+        for abbr in pitlane_starters:
+            current_max += 1
+            grid[abbr] = current_max
 
-    return grid if grid else None
+    return (grid if grid else None), pitlane_starters
 
 
 # ── Reliability extractor ──────────────────────────────────────────────────
