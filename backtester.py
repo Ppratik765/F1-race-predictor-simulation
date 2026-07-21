@@ -255,7 +255,14 @@ def main(year=2025, race='Monza', num_iterations=50_000, penalties_str=""):
             print("  Hint: Data may not yet be uploaded for this weekend.")
             return
 
-        quali_stats, tow_flags = extract_quali_stats(session_fp3)
+        # Get track specifics (df_type, turn_1_chaos, tow_factor, overtaking_diff, SC/VSC rates)
+        try:
+            event_info = fastf1.get_event(year, race)
+            track_info = _get_track_type(event_info['EventName'])
+        except Exception:
+            track_info = None
+
+        quali_stats, tow_flags = extract_quali_stats(session_fp3, track_info=track_info)
         race_stats  = extract_race_pace_and_deg(session_fp2)
         reliability_stats = extract_reliability_stats(year, race)
         season_trends, team_trends = extract_season_trends(year, race)
@@ -269,12 +276,6 @@ def main(year=2025, race='Monza', num_iterations=50_000, penalties_str=""):
         for d, v in fp3_power_index.items():
             power_index[d] = (power_index.get(d, v) + v) / 2.0 if d in power_index else v
 
-        # Get track specifics (df_type, turn_1_chaos, tow_factor, overtaking_diff, SC/VSC rates)
-        try:
-            event_info = fastf1.get_event(year, race)
-            track_info = _get_track_type(event_info['EventName'])
-        except Exception:
-            track_info = None
 
         # Team-specific pit stop loss + botch probability, anchored to this circuit's own pit loss
         track_pit_loss_base = (track_info.get('pit_loss_base', 22.0) if track_info else 22.0)
@@ -373,7 +374,7 @@ def main(year=2025, race='Monza', num_iterations=50_000, penalties_str=""):
                     real_grid = grid_res[0]
                     pitlane_starters = grid_res[1]
             
-            real_tow_flags = detect_tow_assisted_laps(quali_session)
+            real_tow_flags = detect_tow_assisted_laps(quali_session, track_info=track_info)
             if real_tow_flags:
                 tow_flags = {**tow_flags, **real_tow_flags}
 
