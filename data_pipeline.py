@@ -187,6 +187,8 @@ def _get_track_type(event_name):
         'british': 'silverstone',
         'emilia': 'imola',
         'monégasque': 'monaco',
+        'dutch': 'zandvoort',
+        'saudi arabian': 'saudi arabia',
     }
     for adj, country in name_mappings.items():
         if adj in name:
@@ -464,6 +466,15 @@ def detect_tow_assisted_laps(session, track_info=None):
                 max_tow_penalty = max(max_tow_penalty, penalty)
                 
         # 2. Sector-Time Delta Evaluation (S1 & S3 Fallback to bypass speed-trap blindness)
+        s2_gain = 0.0
+        if 'Sector2Time' in driver_laps.columns:
+            s2_times = driver_laps['Sector2Time'].dt.total_seconds().values.astype(float)
+            fast_s2 = s2_times[fastest_idx]
+            baseline_s2 = s2_times[baseline_mask]
+            baseline_s2 = baseline_s2[~np.isnan(baseline_s2)]
+            if len(baseline_s2) > 0:
+                s2_gain = np.median(baseline_s2) - fast_s2
+
         for sec_col in ['Sector1Time', 'Sector3Time']:
             if sec_col not in driver_laps.columns:
                 continue
@@ -483,8 +494,9 @@ def detect_tow_assisted_laps(session, track_info=None):
             baseline_sec_median = np.median(baseline_sec_times)
             sec_delta = baseline_sec_median - fast_sec_time  # Gained time (lower is faster/better)
             
-            if sec_delta > 0.35:
-                # Gaining >0.35s in a straight-line sector is a strong physics-based tow indicator
+            # Gaining >0.35s in a straight-line sector is a strong physics-based tow indicator,
+            # but only if it isn't simply track evolution (which would improve the twisty Sector 2 even more).
+            if sec_delta > 0.35 and sec_delta > (s2_gain - 0.10):
                 penalty = min(sec_delta, 0.45)
                 max_tow_penalty = max(max_tow_penalty, penalty)
                 
