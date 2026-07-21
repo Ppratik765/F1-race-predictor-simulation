@@ -117,7 +117,6 @@ def run_race_sim(
             pidx = power_index.get(d, 0.0)
             base_pace[i] -= pidx * tow_factor * POWER_INDEX_SCALE
 
-    # ── Direct Race-Pace Tow Penalty ──────────────────────────────────
     if tow_flags:
         for i, d in enumerate(drivers):
             tow_penalty = tow_flags.get(d, 0.0)
@@ -137,18 +136,11 @@ def run_race_sim(
             
         for i, d in enumerate(drivers):
             grid_pos = grid_positions.get(d, len(drivers))
-            # Calculate what this driver's pace *should* be based on qualifying
-            expected_pace = pole_pace + ((grid_pos - 1) * 0.12)
-
-            # Apply upper clamping:
-            # - If a driver ran heavy fuel or skipped long runs in FP2, their raw pace will be terrible.
-            #   We clamp them to their expected grid pace so they aren't unfairly penalized for bad practice data.
-            #   We add a tiny +0.05s penalty to ensure pole sitters aren't given *perfect* grace if they lacked data.
-            # - If this driver's grid slot was flagged as likely tow-inflated (detect_tow_assisted_laps),
-            #   we give them much more room below their "expected" pace — their grid position is a
-            #   weaker signal of true race pace than usual, so the clamp shouldn't force them toward it.
             tow_slack = tow_flags.get(d, 0.0) if tow_flags else 0.0
-            base_pace[i] = np.minimum(base_pace[i], expected_pace + 0.05 + tow_slack)
+
+            # Driver's expected race pace baseline is penalized by tow_slack
+            expected_pace = pole_pace + ((grid_pos - 1) * 0.12) + tow_slack
+            base_pace[i] = np.minimum(base_pace[i], expected_pace + 0.05)
             
             # Apply Season Trend Modifier directly to final base pace (Max +/- 0.1s to respect current weekend form)
             if season_trends and d in season_trends:
