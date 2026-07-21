@@ -381,7 +381,7 @@ def filter_laps(laps):
 
 # ── Qualifying extractor (Theoretical Best) ────────────────────────────────
 # ── Tow / Slipstream Detection ──────────────────────────────────────────────
-def detect_tow_assisted_laps(session, z_threshold=1.75, tow_time_per_std=0.06, max_estimate=0.4):
+def detect_tow_assisted_laps(session, z_threshold=1.6, tow_time_per_kmh=0.03, max_estimate=0.45):
     """
     Flags a driver's fastest lap as tow-assisted if its speed-trap reading is
     an outlier relative to THAT DRIVER'S OWN other laps in the same session
@@ -408,25 +408,43 @@ def detect_tow_assisted_laps(session, z_threshold=1.75, tow_time_per_std=0.06, m
     except Exception:
         filtered_laps = session.laps
 
-    speed_col = next((c for c in ['SpeedST', 'SpeedFL', 'SpeedI2', 'SpeedI1']
-                       if c in filtered_laps.columns), None)
-    if speed_col is None:
+    trap_cols = [c for c in ['SpeedST', 'SpeedFL', 'SpeedI1', 'SpeedI2'] if c in filtered_laps.columns]
+    if not trap_cols:
         return tow_flags
 
+    import numpy as np
+    field_medians = {col: filtered_laps[col].median() for col in trap_cols}
+
     for driver in pd.unique(filtered_laps['Driver']):
-        driver_laps = filtered_laps.pick_drivers(driver).dropna(subset=['LapTime', speed_col])
-        if len(driver_laps) < 3:
+        driver_laps = filtered_laps.pick_drivers(driver).dropna(subset=['LapTime'] + trap_cols)
+        if len(driver_laps) < 2:
             continue
 
-        speeds = driver_laps[speed_col].values.astype(float)
         times = driver_laps['LapTime'].dt.total_seconds().values
-        spd_mean = np.mean(speeds)
-        spd_std = max(np.std(speeds), 1.0)
-
         fastest_idx = int(np.argmin(times))
-        z = (speeds[fastest_idx] - spd_mean) / spd_std
-        if z > z_threshold:
-            tow_flags[driver] = float(np.clip(z * tow_time_per_std, 0.0, max_estimate))
+        
+        max_speed_delta = 0.0
+        tow_detected = False
+
+        for col in trap_cols:
+            speeds = driver_laps[col].values.astype(float)
+            spd_mean = np.mean(speeds)
+            spd_std = max(np.std(speeds), 1.0)
+            driver_speed = speeds[fastest_idx]
+            
+            delta_speed = driver_speed - field_medians[col]
+            z = (driver_speed - spd_mean) / spd_std
+            
+            if delta_speed > 4.5 or z > z_threshold:
+                tow_detected = True
+            
+            if delta_speed > max_speed_delta:
+                max_speed_delta = delta_speed
+                
+        if tow_detected:
+            time_boost = min(max_speed_delta * tow_time_per_kmh, max_estimate)
+            if time_boost > 0:
+                tow_flags[driver] = float(time_boost)
 
     return tow_flags
 
@@ -472,7 +490,7 @@ def extract_quali_stats(session):
             subset=['Sector1Time', 'Sector2Time', 'Sector3Time', 'LapTime']
         )
 
-        if len(driver_laps) < 3:
+        if len(driver_laps) < 2:
             continue
 
         # Convert to seconds
@@ -498,7 +516,7 @@ def extract_quali_stats(session):
         if speeds is not None:
             elite_speeds = speeds[elite_idx]
             valid = ~np.isnan(elite_speeds)
-            if valid.sum() >= 3:
+            if valid.sum() >= 2:
                 e_mean = np.mean(elite_speeds[valid])
                 e_std = max(np.std(elite_speeds[valid]), 1.0)
                 z_scores = np.where(valid, (elite_speeds - e_mean) / e_std, 0.0)
