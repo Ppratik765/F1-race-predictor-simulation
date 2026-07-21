@@ -171,9 +171,29 @@ _DEFAULT_TRACK_INFO = {
 
 def _get_track_type(event_name):
     """Resolve an event name to a track type and its characteristics. Falls back to MEDIUM."""
-    name = str(event_name)
+    name = str(event_name).lower()
+    
+    # Map common Grand Prix adjectives/names to keys in TRACK_CHARACTERISTICS
+    name_mappings = {
+        'belgian': 'belgium',
+        'italian': 'italy',
+        'brazilian': 'brazil',
+        'japanese': 'japan',
+        'spanish': 'spain',
+        'mexican': 'mexico',
+        'canadian': 'canada',
+        'hungarian': 'hungary',
+        'austrian': 'austria',
+        'british': 'silverstone',
+        'emilia': 'imola',
+        'monégasque': 'monaco',
+    }
+    for adj, country in name_mappings.items():
+        if adj in name:
+            name += " " + country
+
     for key, info in TRACK_CHARACTERISTICS.items():
-        if key.lower() in name.lower():
+        if key.lower() in name:
             return info
     return dict(_DEFAULT_TRACK_INFO)
 
@@ -381,75 +401,100 @@ def filter_laps(laps):
 
 # ── Qualifying extractor (Theoretical Best) ────────────────────────────────
 # ── Tow / Slipstream Detection ──────────────────────────────────────────────
-def detect_tow_assisted_laps(session, z_threshold=1.6, tow_time_per_kmh=0.03, max_estimate=0.45):
+def detect_tow_assisted_laps(session, track_info=None):
     """
     Flags a driver's fastest lap as tow-assisted if its speed-trap reading is
     an outlier relative to THAT DRIVER'S OWN other laps in the same session
-    (deliberately not a field comparison — a genuinely fast car is fast on
-    every lap, a big slipstream is a one-lap spike). This is the direct fix
-    for the "Hadjar towed Verstappen to P2 at Spa" scenario: a big draft can
-    make a single lap look like genuine pace when it isn't repeatable.
-
-    Works on ANY session with speed-trap columns (FP3 for the simulated-quali
-    path, or a real Qualifying session when one has already happened).
-
-    Returns:
-        dict[driver] -> float estimated seconds of lap-time inflation from
-        the tow (0.0 / absent if nothing flagged). This is a rough heuristic,
-        not a precise physical estimate — it's meant to widen uncertainty
-        around a suspect lap, not to surgically rewrite it.
+    (using intra-driver z-score) or extremely high relative to the field.
     """
     tow_flags = {}
-    if session is None or session.laps is None or len(session.laps) == 0:
-        return tow_flags
-
     try:
-        filtered_laps = filter_laps(session.laps)
+        filtered_laps = session.laps.pick_quicklaps(1.07)
     except Exception:
         filtered_laps = session.laps
+
+    if track_info is None or track_info.get('tow_factor', 0.10) < 0.16:
+        return tow_flags
 
     trap_cols = [c for c in ['SpeedST', 'SpeedFL', 'SpeedI1', 'SpeedI2'] if c in filtered_laps.columns]
     if not trap_cols:
         return tow_flags
 
     import numpy as np
-    field_medians = {col: filtered_laps[col].median() for col in trap_cols}
 
     for driver in pd.unique(filtered_laps['Driver']):
-        driver_laps = filtered_laps.pick_drivers(driver).dropna(subset=['LapTime'] + trap_cols)
+        driver_laps = filtered_laps.pick_drivers(driver).dropna(subset=['LapTime'])
         if len(driver_laps) < 2:
             continue
 
         times = driver_laps['LapTime'].dt.total_seconds().values
         fastest_idx = int(np.argmin(times))
+        fastest_time = times[fastest_idx]
         
-        max_speed_delta = 0.0
-        tow_detected = False
-
+        baseline_mask = (times <= fastest_time * 1.04)
+        baseline_mask[fastest_idx] = False
+        
+        if not np.any(baseline_mask):
+            continue
+            
+        max_tow_penalty = 0.0
+        
+        # 1. Multi-Trap Delta Evaluation (Speed Traps)
         for col in trap_cols:
+            if col not in driver_laps.columns:
+                continue
+            
             speeds = driver_laps[col].values.astype(float)
-            spd_mean = np.mean(speeds)
-            spd_std = max(np.std(speeds), 1.0)
-            driver_speed = speeds[fastest_idx]
+            fast_lap_speed = speeds[fastest_idx]
             
-            delta_speed = driver_speed - field_medians[col]
-            z = (driver_speed - spd_mean) / spd_std
-            
-            if delta_speed > 4.5 or z > z_threshold:
-                tow_detected = True
-            
-            if delta_speed > max_speed_delta:
-                max_speed_delta = delta_speed
+            if np.isnan(fast_lap_speed):
+                continue
                 
-        if tow_detected:
-            time_boost = min(max_speed_delta * tow_time_per_kmh, max_estimate)
-            if time_boost > 0:
-                tow_flags[driver] = float(time_boost)
+            baseline_speeds = speeds[baseline_mask]
+            baseline_speeds = baseline_speeds[~np.isnan(baseline_speeds)]
+            
+            if len(baseline_speeds) == 0:
+                continue
+                
+            baseline_median = np.median(baseline_speeds)
+            speed_spike = fast_lap_speed - baseline_median
+            
+            if speed_spike > 4.0:
+                penalty = min(speed_spike * 0.03, 0.45)
+                max_tow_penalty = max(max_tow_penalty, penalty)
+                
+        # 2. Sector-Time Delta Evaluation (S1 & S3 Fallback to bypass speed-trap blindness)
+        for sec_col in ['Sector1Time', 'Sector3Time']:
+            if sec_col not in driver_laps.columns:
+                continue
+                
+            sec_times = driver_laps[sec_col].dt.total_seconds().values.astype(float)
+            fast_sec_time = sec_times[fastest_idx]
+            
+            if np.isnan(fast_sec_time):
+                continue
+                
+            baseline_sec_times = sec_times[baseline_mask]
+            baseline_sec_times = baseline_sec_times[~np.isnan(baseline_sec_times)]
+            
+            if len(baseline_sec_times) == 0:
+                continue
+                
+            baseline_sec_median = np.median(baseline_sec_times)
+            sec_delta = baseline_sec_median - fast_sec_time  # Gained time (lower is faster/better)
+            
+            if sec_delta > 0.35:
+                # Gaining >0.35s in a straight-line sector is a strong physics-based tow indicator
+                penalty = min(sec_delta, 0.45)
+                max_tow_penalty = max(max_tow_penalty, penalty)
+                
+        if max_tow_penalty > 0.0:
+            tow_flags[driver] = float(max_tow_penalty)
 
     return tow_flags
 
 
-def extract_quali_stats(session):
+def extract_quali_stats(session, track_info=None):
     """
     Builds qualifying sector statistics using a *Theoretical Best Lap* method.
 
@@ -477,7 +522,7 @@ def extract_quali_stats(session):
     filtered_laps = filter_laps(laps)
     drivers = pd.unique(filtered_laps['Driver'])
 
-    tow_flags = detect_tow_assisted_laps(session)
+    tow_flags = detect_tow_assisted_laps(session, track_info=track_info)
 
     speed_col = next((c for c in ['SpeedST', 'SpeedFL', 'SpeedI2', 'SpeedI1']
                        if c in filtered_laps.columns), None)
