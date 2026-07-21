@@ -30,6 +30,7 @@ def run_race_sim(
     pitstop_stats=None,
     power_index=None,
     tow_flags=None,
+    pitlane_starters=None,
 ):
     """
     Fully-vectorised race simulation.
@@ -242,11 +243,19 @@ def run_race_sim(
                                        size=(num_iterations, num_drivers))
             pitstop_lap_arrays.append(p_laps)
 
+    if pitlane_starters is None:
+        pitlane_starters = []
+        
     # ── State tensors ─────────────────────────────────────────────────
     grid_offsets = np.array([grid_positions.get(d, len(drivers)) for d in drivers])
     # Initial grid spacing: ~0.4s per grid slot to prevent instant mega-DRS trains
     total_race_time = np.tile(grid_offsets * 0.4,
                               (num_iterations, 1))  # (iters, drivers)
+                              
+    # Pit lane start penalty (simulating holding at the end of pit lane)
+    for i, d in enumerate(drivers):
+        if d in pitlane_starters:
+            total_race_time[:, i] += 12.0
 
     active_mask = np.ones((num_iterations, num_drivers), dtype=bool)
     tire_ages   = np.ones((num_iterations, num_drivers))  # start at lap 1
