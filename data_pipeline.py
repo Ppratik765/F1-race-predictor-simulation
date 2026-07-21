@@ -623,7 +623,7 @@ def extract_race_pace_and_deg(session):
       2. Identify continuous raw stints using the FastF1 'Stint' column.
       3. Only THEN skip individual anomalous laps (yellows, pit-lane cuts)
          within the stint — the remaining green-flag laps stay grouped.
-      4. If a driver has zero stints ≥ 7 laps, compute a Global Fallback
+      4. If a driver has zero stints ≥ 5 laps, compute a Global Fallback
          from their fastest single flying lap + a heavy-fuel penalty so
          they are never deleted from the simulation.
 
@@ -676,8 +676,8 @@ def extract_race_pace_and_deg(session):
             # Keep only laps on the dominant compound
             stint_df = stint_df[stint_df['Compound'] == compound]
 
-            # Raw stint must be ≥ 7 laps to qualify as a long run (filters out qualifying sims)
-            if len(stint_df) < 7:
+            # Raw stint must be ≥ 5 laps to qualify as a long run (filters out qualifying sims)
+            if len(stint_df) < 5:
                 continue
 
             x_raw = stint_df['TyreLife'].values.astype(float)
@@ -757,7 +757,7 @@ def extract_race_pace_and_deg(session):
             deg_arr = np.array([e['deg_slope'] for e in entries])
             # Credibility weighting: a stint of 12+ laps is treated as a
             # confirmed race-fuel-equivalent run and counts double per lap;
-            # shorter stints (7-11 laps) still count, just proportionally less.
+            # shorter stints (5-11 laps) still count, just proportionally less.
             weights = np.where(n_arr >= 12, n_arr * 2.0, n_arr)
 
             combined_pace = float(np.average(pace_arr, weights=weights))
