@@ -203,7 +203,7 @@ def apply_manual_penalties(raw_grid, penalties_str):
         
     return adjusted_grid, pitlane_starters
 
-def main(year=2025, race='Monza', num_iterations=50_000, penalties_str=""):
+def main(year=2025, race='Monza', num_iterations=50_000, penalties_str="", min_laps=7):
     import pandas as pd  # local import for Timestamp usage
 
     print(f"\n{'-' * 60}")
@@ -263,7 +263,7 @@ def main(year=2025, race='Monza', num_iterations=50_000, penalties_str=""):
             track_info = None
 
         quali_stats, tow_flags = extract_quali_stats(session_fp3, track_info=track_info)
-        race_stats  = extract_race_pace_and_deg(session_fp2)
+        race_stats  = extract_race_pace_and_deg(session_fp2, min_laps=min_laps)
         reliability_stats = extract_reliability_stats(year, race)
         season_trends, team_trends = extract_season_trends(year, race)
         team_mapping = extract_team_mapping(session_fp2)
@@ -559,6 +559,12 @@ if __name__ == "__main__":
     parser.add_argument("--race", type=str, default="Monza", help="Race location or name (e.g. Monza, Bahrain)")
     parser.add_argument("--iterations", type=int, default=50_000, help="Number of simulation iterations")
     parser.add_argument("--penalties", type=str, default="", help="Manual grid penalties (e.g. 'NOR:10,HAD:30,VER:PL')")
+    parser.add_argument(
+        '--min_laps', 
+        type=int, 
+        default=7, 
+        help='Minimum continuous lap stint length required to include in race pace analysis (default: 7)'
+    )
     
     args = parser.parse_args()
-    main(year=args.year, race=args.race, num_iterations=args.iterations, penalties_str=args.penalties)
+    main(year=args.year, race=args.race, num_iterations=args.iterations, penalties_str=args.penalties, min_laps=args.min_laps)
