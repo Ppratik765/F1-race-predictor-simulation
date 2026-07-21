@@ -162,7 +162,48 @@ def _try_load_session(year, race, session_type):
 
 # -- Main ------------------------------------------------------------------
 
-def main(year=2025, race='Monza', num_iterations=50_000):
+def apply_manual_penalties(raw_grid, penalties_str):
+    if not penalties_str or not raw_grid:
+        return raw_grid, []
+    
+    penalties = {}
+    pitlane_starters = []
+    for p in penalties_str.split(','):
+        if ':' in p:
+            drv, pen = p.split(':')
+            drv = drv.strip()
+            pen = pen.strip().upper()
+            if pen == 'PL':
+                pitlane_starters.append(drv)
+            else:
+                try:
+                    penalties[drv] = int(pen)
+                except ValueError:
+                    pass
+    
+    grid_starters = []
+    for drv, initial_pos in raw_grid.items():
+        if drv in pitlane_starters:
+            continue
+        penalty_int = penalties.get(drv, 0)
+        provisional_pos = initial_pos + penalty_int
+        grid_starters.append((provisional_pos, initial_pos, drv))
+        
+    grid_starters.sort(key=lambda x: (x[0], x[1]))
+    
+    adjusted_grid = {}
+    current_pos = 1
+    for _, _, drv in grid_starters:
+        adjusted_grid[drv] = current_pos
+        current_pos += 1
+        
+    for drv in pitlane_starters:
+        adjusted_grid[drv] = current_pos
+        current_pos += 1
+        
+    return adjusted_grid, pitlane_starters
+
+def main(year=2025, race='Monza', num_iterations=50_000, penalties_str=""):
     import pandas as pd  # local import for Timestamp usage
 
     print(f"\n{'-' * 60}")
@@ -310,39 +351,64 @@ def main(year=2025, race='Monza', num_iterations=50_000):
     real_grid = None
     pole_probs = {}
     grid_source = "SIMULATED"
+    pitlane_starters = []
+    race_session = None
 
-    # Try loading actual Qualifying results
+    # Try loading actual Race results first for official grid penalties
+    with Spinner("Fetching real race grid..."):
+        race_session = _try_load_session(year, race, 'R')
+        if race_session is not None and race_session.results is not None and not race_session.results.empty:
+            grid_res = extract_real_grid(race_session)
+            if grid_res[0] is not None:
+                real_grid = grid_res[0]
+                pitlane_starters = grid_res[1]
+
+    # ALWAYS load Q session to get tow flags (and grid if R wasn't available)
     with Spinner("Fetching real quali..."):
         quali_session = _try_load_session(year, race, 'Q')
         if quali_session is not None:
-            real_grid = extract_real_grid(quali_session)
-            # The REAL quali session is what actually set the grid, so its own
-            # tow/draft situation (e.g. Hadjar towing Verstappen to P2 at Spa)
-            # takes priority over anything inferred from FP3.
+            if real_grid is None:
+                grid_res = extract_real_grid(quali_session)
+                if grid_res[0] is not None:
+                    real_grid = grid_res[0]
+                    pitlane_starters = grid_res[1]
+            
             real_tow_flags = detect_tow_assisted_laps(quali_session)
             if real_tow_flags:
                 tow_flags = {**tow_flags, **real_tow_flags}
 
     if real_grid is not None:
-        grid_source = "ACTUAL (from Qualifying)"
+        grid_source = "ACTUAL (from Official Session)"
         grid_positions = {d: float(p) for d, p in real_grid.items()}
-        print(f"Fetched real quali! ({len(real_grid)} drivers)")
+        print(f"Fetched official grid! ({len(real_grid)} drivers)")
+        
+        if race_session is not None:
+            print("\n🚨  OFFICIAL RACE SESSION FOUND: Grid penalties and Pit Lane starts automatically applied from official FIA starting grid.")
 
-        if real_tow_flags:
+        # Apply manual penalties only if we didn't get them from the Race session
+        if race_session is None and penalties_str:
+            grid_positions, pl_starters = apply_manual_penalties(grid_positions, penalties_str)
+            pitlane_starters.extend(pl_starters)
+            grid_source += " + MANUAL PENALTIES"
+
+        if 'real_tow_flags' in locals() and real_tow_flags:
             print("\n🌬️  TOW / DRAFT FLAGS FROM ACTUAL QUALIFYING")
             for d, secs in sorted(real_tow_flags.items(), key=lambda x: -x[1]):
                 print(f"   • {d}: grid slot looks ~{secs:.2f}s better than a repeatable lap — "
                       f"race pace will not be clamped as tightly to this grid position.")
 
         # Print actual grid
-        grid_rows = sorted(real_grid.items(), key=lambda x: x[1])
+        grid_rows = sorted(grid_positions.items(), key=lambda x: x[1])
+        
+        formatted_rows = []
+        for drv, pos in grid_rows:
+            pos_str = "PIT LANE" if drv in pitlane_starters else str(int(pos))
+            formatted_rows.append([pos_str, drv])
+            
         _print_table(
-            "QUALIFYING GRID (ACTUAL RESULTS)",
+            "STARTING GRID",
             ["Pos", "Driver"],
-            [
-                [str(pos), drv]
-                for drv, pos in grid_rows
-            ],
+            formatted_rows,
         )
     else:
         # No real qualifying → run simulation
@@ -351,19 +417,27 @@ def main(year=2025, race='Monza', num_iterations=50_000):
                 quali_stats, track_info, season_trends, num_iterations, power_index=power_index
             )
         grid_positions = expected_grid
+        pitlane_starters = []
         grid_source = "PREDICTED (Monte Carlo)"
+
+        if penalties_str:
+            discrete_grid = {drv: idx + 1 for idx, (drv, pos) in enumerate(sorted(expected_grid.items(), key=lambda x: x[1]))}
+            grid_positions, pitlane_starters = apply_manual_penalties(discrete_grid, penalties_str)
+            grid_source += " + MANUAL PENALTIES"
 
         t_q = time.time()
         print(f"✓ Qualifying sim done in {t_q - t1:.1f} s")
 
-        grid_rows = sorted(expected_grid.items(), key=lambda x: x[1])
+        grid_rows = sorted(grid_positions.items(), key=lambda x: x[1])
+        formatted_rows = []
+        for drv, pos in grid_rows:
+            pos_str = "PIT LANE" if drv in pitlane_starters else f"{pos:.1f}" if not penalties_str else str(int(pos))
+            formatted_rows.append([pos_str, drv, _pct(pole_probs.get(drv, 0))])
+
         _print_table(
             "QUALIFYING PREDICTIONS",
-            ["Pos", "Driver", "Exp. Grid", "Pole %"],
-            [
-                [str(idx + 1), drv, f"{pos:.1f}", _pct(pole_probs.get(drv, 0))]
-                for idx, (drv, pos) in enumerate(grid_rows)
-            ],
+            ["Pos", "Driver", "Pole %"],
+            formatted_rows,
         )
 
     print(f"\n   Grid source: {grid_source}")
@@ -393,6 +467,7 @@ def main(year=2025, race='Monza', num_iterations=50_000):
             pitstop_stats=pitstop_stats,
             power_index=power_index,
             tow_flags=tow_flags,
+            pitlane_starters=pitlane_starters,
         )
     t3 = time.time()
     print(f"✓ Race done in {t3 - t2:.1f} s")
@@ -482,6 +557,7 @@ if __name__ == "__main__":
     parser.add_argument("--year", type=int, default=2025, help="Season year (e.g. 2024, 2025, 2026)")
     parser.add_argument("--race", type=str, default="Monza", help="Race location or name (e.g. Monza, Bahrain)")
     parser.add_argument("--iterations", type=int, default=50_000, help="Number of simulation iterations")
+    parser.add_argument("--penalties", type=str, default="", help="Manual grid penalties (e.g. 'NOR:10,HAD:30,VER:PL')")
     
     args = parser.parse_args()
-    main(year=args.year, race=args.race, num_iterations=args.iterations)
+    main(year=args.year, race=args.race, num_iterations=args.iterations, penalties_str=args.penalties)
