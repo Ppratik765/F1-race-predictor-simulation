@@ -184,7 +184,7 @@ def apply_manual_penalties(raw_grid, penalties_str):
     N = len(raw_grid)
     grid = [None] * N
     
-    active_grid = {d: p for d, p in raw_grid.items() if d not in pitlane_starters}
+    active_grid = {d: int(p) for d, p in raw_grid.items() if d not in pitlane_starters}
     sorted_drivers = sorted(active_grid.items(), key=lambda x: x[1])
     
     # 1. Unpenalized drivers placed in qualifying positions
