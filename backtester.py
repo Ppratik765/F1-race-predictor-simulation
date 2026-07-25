@@ -181,22 +181,43 @@ def apply_manual_penalties(raw_grid, penalties_str):
                 except ValueError:
                     pass
     
-    grid_starters = []
-    for drv, initial_pos in raw_grid.items():
-        if drv in pitlane_starters:
-            continue
-        penalty_int = penalties.get(drv, 0)
-        provisional_pos = initial_pos + penalty_int
-        grid_starters.append((provisional_pos, initial_pos, drv))
-        
-    grid_starters.sort(key=lambda x: (x[0], x[1]))
+    N = len(raw_grid)
+    grid = [None] * N
     
+    active_grid = {d: p for d, p in raw_grid.items() if d not in pitlane_starters}
+    sorted_drivers = sorted(active_grid.items(), key=lambda x: x[1])
+    
+    # 1. Unpenalized drivers placed in qualifying positions
+    for drv, pos in sorted_drivers:
+        if drv not in penalties:
+            grid[pos - 1] = drv
+            
+    # Remove gaps
+    grid = [d for d in grid if d is not None]
+    
+    # 2. Penalized drivers
+    penalized_drivers = []
+    for drv, pos in sorted_drivers:
+        if drv in penalties:
+            penalized_drivers.append((drv, pos + penalties[drv], pos))
+            
+    # Sort penalized by temporary position ASC, then quali position DESC (slowest first)
+    penalized_drivers.sort(key=lambda x: (x[1], -x[2]))
+    
+    for drv, temp_pos, _ in penalized_drivers:
+        insert_idx = temp_pos - 1
+        if insert_idx >= len(grid):
+            grid.append(drv)
+        else:
+            grid.insert(insert_idx, drv)
+            
     adjusted_grid = {}
     current_pos = 1
-    for _, _, drv in grid_starters:
-        adjusted_grid[drv] = current_pos
-        current_pos += 1
-        
+    for drv in grid:
+        if drv is not None:
+            adjusted_grid[drv] = current_pos
+            current_pos += 1
+            
     for drv in pitlane_starters:
         adjusted_grid[drv] = current_pos
         current_pos += 1
