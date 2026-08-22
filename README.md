@@ -16,38 +16,50 @@ A highly accurate, data-driven Monte Carlo simulation engine for Formula 1 race 
 
 ## 2026 Season Pre-Race Win Probability Forecasts
 
-### 🇦🇹 Austrian Grand Prix 2026 (Red Bull Ring)
-*Generated: June 27, 2026 (Post-Quali)*
+<details>
+<summary><b>🇦🇹 Austrian Grand Prix 2026 (Red Bull Ring)</b> — <i>Generated: June 27, 2026 (Post-Quali)</i></summary>
+
+<br>
 
 ![Austrian Grand Prix 2026 Win Probabilities](visualizations/f1_sim_2026_austria_win_probabilities.png)
 
----
+</details>
 
-### 🇬🇧 British Grand Prix 2026 (Silverstone)
-*Generated: July 4, 2026 (Post-Quali)*
+<details>
+<summary><b>🇬🇧 British Grand Prix 2026 (Silverstone)</b> — <i>Generated: July 4, 2026 (Post-Quali)</i></summary>
+
+<br>
 
 ![British Grand Prix 2026 Win Probabilities](visualizations/f1_sim_2026_british_win_probabilities.png)
 
----
+</details>
 
-### 🇧🇪 Belgian Grand Prix 2026 (Spa-Francorchamps)
-*Generated: July 18, 2026 (Post-Quali)*
+<details>
+<summary><b>🇧🇪 Belgian Grand Prix 2026 (Spa-Francorchamps)</b> — <i>Generated: July 18, 2026 (Post-Quali)</i></summary>
+
+<br>
 
 ![Belgian Grand Prix 2026 Win Probabilities](visualizations/f1_sim_2026_belgium_win_probabilities.png)
 
----
+</details>
 
-### 🇭🇺 Hungarian Grand Prix 2026 (Hungaroring)
-*Generated: July 25, 2026 (Post-Quali)*
+<details>
+<summary><b>🇭🇺 Hungarian Grand Prix 2026 (Hungaroring)</b> — <i>Generated: July 25, 2026 (Post-Quali)</i></summary>
+
+<br>
 
 ![Hungarian Grand Prix 2026 Win Probabilities](visualizations/f1_sim_2026_hungary_win_probabilities.png)
 
----
+</details>
 
-### 🇳🇱 Dutch Grand Prix 2026 (Circuit Zandvoort)
-*Generated: August 22, 2026 (Post-Quali)*
+<details>
+<summary><b>🇳🇱 Dutch Grand Prix 2026 (Circuit Zandvoort)</b> — <i>Generated: August 22, 2026 (Post-Quali)</i></summary>
+
+<br>
 
 ![Dutch Grand Prix 2026 Win Probabilities](visualizations/f1_sim_2026_dutch_win_probabilities.png)
+
+</details>
 
 ---
 
