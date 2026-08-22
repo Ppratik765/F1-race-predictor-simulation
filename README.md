@@ -4,13 +4,45 @@ A highly accurate, data-driven Monte Carlo simulation engine for Formula 1 race 
 
 ## Table of Contents
 
-1. [Architecture](#architecture)
-2. [Project Directory Tree](#project-directory-tree)
-3. [Prerequisites](#prerequisites)
-4. [Local Execution](#local-execution)
-5. [Visualization and Outputs](#visualization-and-outputs)
-6. [2026 Season Pre-Race Win Probability Forecasts](#2026-season-pre-race-win-probability-forecasts)
+1. [2026 Season Pre-Race Win Probability Forecasts](#2026-season-pre-race-win-probability-forecasts)
+2. [Architecture](#architecture)
+3. [Project Directory Tree](#project-directory-tree)
+4. [Prerequisites](#prerequisites)
+5. [Local Execution](#local-execution)
+6. [Visualization and Outputs](#visualization-and-outputs)
 7. [Author & Citations](#author--citations)
+
+---
+
+## 2026 Season Pre-Race Win Probability Forecasts
+
+> **Note on Forecast Timing**: All simulations and probability distributions below were produced and generated **pre-race** (immediately following qualifying session telemetry extraction, prior to the Grand Prix race start).
+
+### 🇦🇹 Austrian Grand Prix 2026 (Red Bull Ring)
+*Generated: June 27–28, 2026 (Post-Qualifying · Pre-Race)*
+
+![Austrian Grand Prix 2026 Win Probabilities](visualizations/f1_sim_2026_austria_win_probabilities.png)
+
+---
+
+### 🇬🇧 British Grand Prix 2026 (Silverstone)
+*Generated: July 4–5, 2026 (Post-Qualifying · Pre-Race)*
+
+![British Grand Prix 2026 Win Probabilities](visualizations/f1_sim_2026_british_win_probabilities.png)
+
+---
+
+### 🇧🇪 Belgian Grand Prix 2026 (Spa-Francorchamps)
+*Generated: July 18–19, 2026 (Post-Qualifying · Pre-Race)*
+
+![Belgian Grand Prix 2026 Win Probabilities](visualizations/f1_sim_2026_belgium_win_probabilities.png)
+
+---
+
+### 🇭🇺 Hungarian Grand Prix 2026 (Hungaroring)
+*Generated: July 25–26, 2026 (Post-Qualifying · Pre-Race)*
+
+![Hungarian Grand Prix 2026 Win Probabilities](visualizations/f1_sim_2026_hungary_win_probabilities.png)
 
 ---
 
@@ -97,38 +129,6 @@ The `visualizer.py` engine generates five distinct analytical charts located in 
 3. **Expected Points Yield**: Bar chart projecting the mean points haul for the top 10 scoring drivers.
 4. **Net Position Change**: Diverging bar chart measuring expected position gains/losses relative to the starting grid.
 5. **DNF Risk Profile**: A lollipop chart evaluating historical retirement probabilities against the grid average.
-
----
-
-## 2026 Season Pre-Race Win Probability Forecasts
-
-> **Note on Forecast Timing**: All simulations and probability distributions below were produced and generated **pre-race** (immediately following qualifying session telemetry extraction, prior to the Grand Prix race start).
-
-### 🇦🇹 Austrian Grand Prix 2026 (Red Bull Ring)
-*Generated: June 27–28, 2026 (Post-Qualifying · Pre-Race)*
-
-![Austrian Grand Prix 2026 Win Probabilities](visualizations/f1_sim_2026_austria_win_probabilities.png)
-
----
-
-### 🇬🇧 British Grand Prix 2026 (Silverstone)
-*Generated: July 4–5, 2026 (Post-Qualifying · Pre-Race)*
-
-![British Grand Prix 2026 Win Probabilities](visualizations/f1_sim_2026_british_win_probabilities.png)
-
----
-
-### 🇧🇪 Belgian Grand Prix 2026 (Spa-Francorchamps)
-*Generated: July 18–19, 2026 (Post-Qualifying · Pre-Race)*
-
-![Belgian Grand Prix 2026 Win Probabilities](visualizations/f1_sim_2026_belgium_win_probabilities.png)
-
----
-
-### 🇭🇺 Hungarian Grand Prix 2026 (Hungaroring)
-*Generated: July 25–26, 2026 (Post-Qualifying · Pre-Race)*
-
-![Hungarian Grand Prix 2026 Win Probabilities](visualizations/f1_sim_2026_hungary_win_probabilities.png)
 
 ---
 
