@@ -46,6 +46,13 @@ A highly accurate, data-driven Monte Carlo simulation engine for Formula 1 race 
 
 ---
 
+### 🇳🇱 Dutch Grand Prix 2026 (Circuit Zandvoort)
+*Generated: August 22–23, 2026 (Post-Qualifying · Pre-Race)*
+
+![Dutch Grand Prix 2026 Win Probabilities](visualizations/f1_sim_2026_dutch_win_probabilities.png)
+
+---
+
 ## Architecture
 
 The simulation engine is separated into modular components designed to handle specific stages of the F1 weekend:
