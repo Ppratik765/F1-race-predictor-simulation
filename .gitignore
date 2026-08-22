@@ -2,6 +2,5 @@ __pycache__/
 fastf1_cache/
 _cache/
 *.json
-visualizations/*.png
 *.pyc
 watermark.png
