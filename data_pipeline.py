@@ -157,8 +157,8 @@ TRACK_CHARACTERISTICS = {
     'Montreal':      {'df_type': 'LOW_DF', 'turn_1_chaos': 0.035, 'tow_factor': 0.15, 'overtaking_diff': 0.40, 'sc_probability': 0.65, 'vsc_probability': 0.30, 'pit_loss_base': 20.5},
     'Baku':          {'df_type': 'LOW_DF', 'turn_1_chaos': 0.065, 'tow_factor': 0.28, 'overtaking_diff': 0.68, 'sc_probability': 0.65, 'vsc_probability': 0.30, 'pit_loss_base': 20.0},
     'Azerbaijan':    {'df_type': 'LOW_DF', 'turn_1_chaos': 0.065, 'tow_factor': 0.28, 'overtaking_diff': 0.68, 'sc_probability': 0.65, 'vsc_probability': 0.30, 'pit_loss_base': 20.0},
-    'Monza':         {'df_type': 'LOW_DF', 'turn_1_chaos': 0.080, 'tow_factor': 0.30, 'overtaking_diff': 0.75, 'sc_probability': 0.50, 'vsc_probability': 0.38, 'pit_loss_base': 23.7},
-    'Italy':         {'df_type': 'LOW_DF', 'turn_1_chaos': 0.080, 'tow_factor': 0.30, 'overtaking_diff': 0.75, 'sc_probability': 0.50, 'vsc_probability': 0.38, 'pit_loss_base': 23.7},
+    'Monza':         {'df_type': 'LOW_DF', 'turn_1_chaos': 0.120, 'tow_factor': 0.30, 'overtaking_diff': 0.25, 'sc_probability': 0.65, 'vsc_probability': 0.35, 'pit_loss_base': 23.7},
+    'Italy':         {'df_type': 'LOW_DF', 'turn_1_chaos': 0.120, 'tow_factor': 0.30, 'overtaking_diff': 0.25, 'sc_probability': 0.65, 'vsc_probability': 0.35, 'pit_loss_base': 23.7},
     'Spa':           {'df_type': 'LOW_DF', 'turn_1_chaos': 0.070, 'tow_factor': 0.22, 'overtaking_diff': 0.70, 'sc_probability': 0.55, 'vsc_probability': 0.30, 'pit_loss_base': 21.0},
     'Belgium':       {'df_type': 'LOW_DF', 'turn_1_chaos': 0.070, 'tow_factor': 0.22, 'overtaking_diff': 0.70, 'sc_probability': 0.55, 'vsc_probability': 0.30, 'pit_loss_base': 21.0},
     'Las Vegas':     {'df_type': 'LOW_DF', 'turn_1_chaos': 0.050, 'tow_factor': 0.30, 'overtaking_diff': 0.72, 'sc_probability': 0.40, 'vsc_probability': 0.25, 'pit_loss_base': 20.0},
@@ -464,6 +464,14 @@ def detect_tow_assisted_laps(session, track_info=None):
             if speed_spike > 4.0:
                 penalty = min(speed_spike * 0.03, 0.45)
                 max_tow_penalty = max(max_tow_penalty, penalty)
+
+            # Field median comparison for extreme low-downforce trim / field-wide tow
+            if col in filtered_laps.columns:
+                field_vals = filtered_laps[col].values.astype(float)
+                field_med = np.nanmedian(field_vals)
+                if not np.isnan(field_med) and (fast_lap_speed - field_med) > 7.0:
+                    penalty = min((fast_lap_speed - field_med) * 0.04, 0.45)
+                    max_tow_penalty = max(max_tow_penalty, penalty)
                 
         # 2. Sector-Time Delta Evaluation (S1 & S3 Fallback to bypass speed-trap blindness)
         s2_gain = 0.0
