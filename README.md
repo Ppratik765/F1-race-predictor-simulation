@@ -61,6 +61,15 @@ A highly accurate, data-driven Monte Carlo simulation engine for Formula 1 race 
 
 </details>
 
+<details>
+<summary><b>🇮🇹 Italian Grand Prix 2026 (Autodromo Nazionale Monza)</b> — <i>Generated: September 5, 2026 (Post-Quali)</i></summary>
+
+<br>
+
+![Italian Grand Prix 2026 Win Probabilities](visualizations/f1_sim_2026_monza_win_probabilities.png)
+
+</details>
+
 ---
 
 ## Architecture
