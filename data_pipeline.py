@@ -620,7 +620,7 @@ def extract_quali_stats(session, track_info=None):
 
 
 # ── Race-pace / degradation extractor ──────────────────────────────────────
-def extract_race_pace_and_deg(session, min_laps=7):
+def extract_race_pace_and_deg(session, min_laps=7, fallback_sessions=None):
     """
     Analyses practice / sprint stints to determine race-pace parameters.
 
@@ -647,7 +647,11 @@ def extract_race_pace_and_deg(session, min_laps=7):
         raw_laps = laps.copy()
 
     raw_laps = raw_laps.dropna(subset=['LapTime', 'TyreLife', 'Compound'])
-    drivers = pd.unique(raw_laps['Driver'])
+    
+    # Include all drivers who took part in this session or fallback sessions
+    drivers = set(raw_laps['Driver'])
+    if 'Driver' in laps.columns:
+        drivers.update(pd.unique(laps['Driver'].dropna()))
 
     COMPOUNDS = ['SOFT', 'MEDIUM', 'HARD']
     HEAVY_FUEL_PENALTY = 4.5   # seconds added to a quali-sim lap to estimate race pace
@@ -657,6 +661,17 @@ def extract_race_pace_and_deg(session, min_laps=7):
 
     # ── Also collect fastest flying lap per driver for global fallback ──
     driver_fastest_lap = {}
+
+    if fallback_sessions:
+        for fs in fallback_sessions:
+            if fs is not None and getattr(fs, 'laps', None) is not None and len(fs.laps) > 0:
+                if 'Driver' in fs.laps.columns:
+                    drivers.update(pd.unique(fs.laps['Driver'].dropna()))
+                for d in pd.unique(fs.laps['Driver']):
+                    if d not in driver_fastest_lap:
+                        fl = fs.laps.pick_drivers(d)['LapTime'].dt.total_seconds().dropna()
+                        if len(fl) > 0:
+                            driver_fastest_lap[d] = float(fl.min())
 
     for driver in drivers:
         driver_laps = raw_laps[raw_laps['Driver'] == driver]
@@ -855,7 +870,7 @@ def extract_race_pace_and_deg(session, min_laps=7):
     soft_paces = [s['SOFT']['base_pace'] for s in race_stats.values() if 'SOFT' in s]
     fallback_soft_pace = float(np.median(soft_paces)) if soft_paces else 90.0
 
-    for driver in drivers:
+    for driver in sorted(drivers):
         if driver in race_stats:
             continue  # already has stint data
 

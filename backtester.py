@@ -284,10 +284,12 @@ def main(year=2025, race='Monza', num_iterations=50_000, penalties_str="", min_l
             track_info = None
 
         quali_stats, tow_flags = extract_quali_stats(session_fp3, track_info=track_info)
-        race_stats  = extract_race_pace_and_deg(session_fp2, min_laps=min_laps)
+        race_stats  = extract_race_pace_and_deg(session_fp2, min_laps=min_laps, fallback_sessions=[session_fp3])
         reliability_stats = extract_reliability_stats(year, race)
         season_trends, team_trends = extract_season_trends(year, race)
         team_mapping = extract_team_mapping(session_fp2)
+        if session_fp3 is not None:
+            team_mapping.update({d: info for d, info in extract_team_mapping(session_fp3).items() if d not in team_mapping})
         weather_context = extract_weather_context(session_fp2)
 
         # Straight-line speed / power-unit deployment index (speed-trap based,
@@ -398,6 +400,7 @@ def main(year=2025, race='Monza', num_iterations=50_000, penalties_str="", min_l
             real_tow_flags = detect_tow_assisted_laps(quali_session, track_info=track_info)
             if real_tow_flags:
                 tow_flags = {**tow_flags, **real_tow_flags}
+            team_mapping.update({d: info for d, info in extract_team_mapping(quali_session).items() if d not in team_mapping})
 
     if real_grid is not None:
         grid_source = "ACTUAL (from Official Session)"
@@ -468,9 +471,73 @@ def main(year=2025, race='Monza', num_iterations=50_000, penalties_str="", min_l
     num_laps = 57
     t2 = time.time()
     
-    # Ensure grid_positions only includes drivers we have race pace for
-    num_drivers = len(race_stats.keys())
-    sim_grid = {d: grid_positions.get(d, num_drivers) for d in race_stats.keys()}
+    # ── Synchronize starting grid and race pace ────────────────────────
+    # 1. Drop drivers who participated in practice but did not qualify (e.g. reserve/FP2 test drivers)
+    race_stats = {d: s for d, s in race_stats.items() if d in grid_positions}
+
+    # 2. Rescue any driver on the starting grid missing from race_stats (e.g. 0 timed laps in FP2)
+    missing_drivers = [d for d in grid_positions if d not in race_stats]
+    if missing_drivers:
+        field_deg_slopes = [c['deg_slope'] for s in race_stats.values() for c in s.values() if 'deg_slope' in c]
+        median_deg = float(np.median(field_deg_slopes)) if field_deg_slopes else 0.06
+
+        soft_paces = [s['SOFT']['base_pace'] for s in race_stats.values() if 'SOFT' in s]
+        fallback_soft_pace = float(np.median(soft_paces)) if soft_paces else 90.0
+
+        deltas_soft_med = [s['MEDIUM']['base_pace'] - s['SOFT']['base_pace'] for s in race_stats.values() if 'MEDIUM' in s and 'SOFT' in s]
+        deltas_med_hard = [s['HARD']['base_pace'] - s['MEDIUM']['base_pace'] for s in race_stats.values() if 'HARD' in s and 'MEDIUM' in s]
+
+        soft_med_delta = float(np.median(deltas_soft_med)) if len(deltas_soft_med) >= 2 else 0.4
+        med_hard_delta = float(np.median(deltas_med_hard)) if len(deltas_med_hard) >= 2 else 0.4
+        soft_med_delta = max(min(soft_med_delta, 1.5), 0.1)
+        med_hard_delta = max(min(med_hard_delta, 1.5), 0.1)
+
+        compound_offsets = {
+            'SOFT': 0.0,
+            'MEDIUM': soft_med_delta,
+            'HARD': soft_med_delta + med_hard_delta
+        }
+
+        print("\n🆘  RESCUED GRID DRIVERS MISSING FP2 RACE PACE")
+        for d in missing_drivers:
+            fastest_lap = None
+            source_session = None
+            for sess, s_name in [(session_fp3, getattr(session_fp3, '_loaded_as', 'FP3')),
+                                  (quali_session, 'Qualifying')]:
+                if sess is not None and getattr(sess, 'laps', None) is not None and len(sess.laps) > 0:
+                    laps_d = sess.laps.pick_drivers(d)['LapTime'].dt.total_seconds().dropna()
+                    if len(laps_d) > 0:
+                        fastest_lap = float(laps_d.min())
+                        source_session = s_name
+                        break
+
+            if fastest_lap is not None:
+                base_soft = fastest_lap + 4.5
+                src_str = f"{source_session} flying lap ({fastest_lap:.3f}s + 4.5s fuel)"
+            elif d in quali_stats:
+                q_s = quali_stats[d]
+                theo_best = q_s['S1_mean'] + q_s['S2_mean'] + q_s['S3_mean']
+                base_soft = theo_best + 4.5
+                src_str = f"Quali theoretical best ({theo_best:.3f}s + 4.5s fuel)"
+            else:
+                base_soft = fallback_soft_pace
+                src_str = "field median pace baseline"
+
+            grid_slot = int(grid_positions[d])
+            print(f"   • {d} (Grid P{grid_slot}): no valid FP2 laps found — synthesized race pace from {src_str}.")
+
+            race_stats[d] = {
+                compound: {
+                    'base_pace': base_soft + compound_offsets[compound],
+                    'deg_slope': median_deg,
+                    'sample_laps': 0,
+                    'longest_stint': 0,
+                    'num_stints': 0,
+                }
+                for compound in ['SOFT', 'MEDIUM', 'HARD']
+            }
+
+    sim_grid = {d: grid_positions[d] for d in grid_positions.keys()}
 
     with Spinner("Doing race simulation..."):
         finishing_probs, final_ranks, race_drivers, active_mask = run_race_sim(
