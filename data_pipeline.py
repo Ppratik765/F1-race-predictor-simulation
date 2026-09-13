@@ -126,9 +126,9 @@ TRACK_CHARACTERISTICS = {
     'Barcelona':     {'df_type': 'MEDIUM', 'turn_1_chaos': 0.040, 'tow_factor': 0.12, 'overtaking_diff': 0.70, 'sc_probability': 0.25, 'vsc_probability': 0.20, 'pit_loss_base': 21.0},
     'Catalunya':     {'df_type': 'MEDIUM', 'turn_1_chaos': 0.040, 'tow_factor': 0.12, 'overtaking_diff': 0.70, 'sc_probability': 0.25, 'vsc_probability': 0.20, 'pit_loss_base': 21.0},
 
-    # SPAIN / MADRID (2026+ IFEMA semi-street circuit)
-    'Madrid':        {'df_type': 'MEDIUM', 'turn_1_chaos': 0.065, 'tow_factor': 0.16, 'overtaking_diff': 0.58, 'sc_probability': 0.55, 'vsc_probability': 0.30, 'pit_loss_base': 22.5},
-    'Spain':         {'df_type': 'MEDIUM', 'turn_1_chaos': 0.065, 'tow_factor': 0.16, 'overtaking_diff': 0.58, 'sc_probability': 0.55, 'vsc_probability': 0.30, 'pit_loss_base': 22.5},
+    # SPAIN / MADRID (2026+ IFEMA semi-street circuit — narrow, high aero, hard to overtake, low tow, demanding on cars)
+    'Madrid':        {'df_type': 'HIGH_DF', 'turn_1_chaos': 0.075, 'tow_factor': 0.06, 'overtaking_diff': 0.85, 'sc_probability': 0.65, 'vsc_probability': 0.35, 'pit_loss_base': 23.0},
+    'Spain':         {'df_type': 'HIGH_DF', 'turn_1_chaos': 0.075, 'tow_factor': 0.06, 'overtaking_diff': 0.85, 'sc_probability': 0.65, 'vsc_probability': 0.35, 'pit_loss_base': 23.0},
     'Melbourne':     {'df_type': 'MEDIUM', 'turn_1_chaos': 0.050, 'tow_factor': 0.10, 'overtaking_diff': 0.65, 'sc_probability': 0.67, 'vsc_probability': 0.50, 'pit_loss_base': 20.1},
     'Japan':         {'df_type': 'MEDIUM', 'turn_1_chaos': 0.045, 'tow_factor': 0.12, 'overtaking_diff': 0.60, 'sc_probability': 0.30, 'vsc_probability': 0.25, 'pit_loss_base': 21.5},
     'Suzuka':        {'df_type': 'MEDIUM', 'turn_1_chaos': 0.045, 'tow_factor': 0.12, 'overtaking_diff': 0.60, 'sc_probability': 0.30, 'vsc_probability': 0.25, 'pit_loss_base': 21.5},

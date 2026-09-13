@@ -351,9 +351,12 @@ def main(year=2025, race='Monza', num_iterations=50_000, penalties_str="", min_l
                       f"— could still reflect an unrepresentative fuel load.")
 
     if track_info:
-        print(f"\n   Track history: SC {_pct(track_info.get('sc_probability', 0.35))} · "
+        print(f"\n   Track profile: Type {track_info.get('df_type', 'MEDIUM')} · "
+              f"SC {_pct(track_info.get('sc_probability', 0.35))} · "
               f"VSC {_pct(track_info.get('vsc_probability', 0.25))} · "
-              f"Typical pit loss ~{track_info.get('pit_loss_base', 22.0):.1f}s")
+              f"Overtaking Diff {track_info.get('overtaking_diff', 0.5):.2f} · "
+              f"Tow {track_info.get('tow_factor', 0.10):.2f} · "
+              f"Pit loss ~{track_info.get('pit_loss_base', 22.0):.1f}s")
     
     # Print weather conditions
     if weather_context:
