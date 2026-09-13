@@ -122,9 +122,13 @@ TRACK_CHARACTERISTICS = {
     'Hungary':       {'df_type': 'HIGH_DF', 'turn_1_chaos': 0.060, 'tow_factor': 0.08, 'overtaking_diff': 0.85, 'sc_probability': 0.25, 'vsc_probability': 0.25, 'pit_loss_base': 20.6},
     'Zandvoort':     {'df_type': 'HIGH_DF', 'turn_1_chaos': 0.035, 'tow_factor': 0.08, 'overtaking_diff': 0.82, 'sc_probability': 0.50, 'vsc_probability': 0.30, 'pit_loss_base': 22.0},
 
-    # MEDIUM-HIGH DOWNFORCE — narrow or hard to follow
-    'Spain':         {'df_type': 'MEDIUM', 'turn_1_chaos': 0.040, 'tow_factor': 0.12, 'overtaking_diff': 0.70, 'sc_probability': 0.25, 'vsc_probability': 0.20, 'pit_loss_base': 21.0},
+    # BARCELONA (Circuit de Barcelona-Catalunya)
     'Barcelona':     {'df_type': 'MEDIUM', 'turn_1_chaos': 0.040, 'tow_factor': 0.12, 'overtaking_diff': 0.70, 'sc_probability': 0.25, 'vsc_probability': 0.20, 'pit_loss_base': 21.0},
+    'Catalunya':     {'df_type': 'MEDIUM', 'turn_1_chaos': 0.040, 'tow_factor': 0.12, 'overtaking_diff': 0.70, 'sc_probability': 0.25, 'vsc_probability': 0.20, 'pit_loss_base': 21.0},
+
+    # SPAIN / MADRID (2026+ IFEMA semi-street circuit)
+    'Madrid':        {'df_type': 'MEDIUM', 'turn_1_chaos': 0.065, 'tow_factor': 0.16, 'overtaking_diff': 0.58, 'sc_probability': 0.55, 'vsc_probability': 0.30, 'pit_loss_base': 22.5},
+    'Spain':         {'df_type': 'MEDIUM', 'turn_1_chaos': 0.065, 'tow_factor': 0.16, 'overtaking_diff': 0.58, 'sc_probability': 0.55, 'vsc_probability': 0.30, 'pit_loss_base': 22.5},
     'Melbourne':     {'df_type': 'MEDIUM', 'turn_1_chaos': 0.050, 'tow_factor': 0.10, 'overtaking_diff': 0.65, 'sc_probability': 0.67, 'vsc_probability': 0.50, 'pit_loss_base': 20.1},
     'Japan':         {'df_type': 'MEDIUM', 'turn_1_chaos': 0.045, 'tow_factor': 0.12, 'overtaking_diff': 0.60, 'sc_probability': 0.30, 'vsc_probability': 0.25, 'pit_loss_base': 21.5},
     'Suzuka':        {'df_type': 'MEDIUM', 'turn_1_chaos': 0.045, 'tow_factor': 0.12, 'overtaking_diff': 0.60, 'sc_probability': 0.30, 'vsc_probability': 0.25, 'pit_loss_base': 21.5},
@@ -170,8 +174,14 @@ _DEFAULT_TRACK_INFO = {
 }
 
 def _get_track_type(event_name):
-    """Resolve an event name to a track type and its characteristics. Falls back to MEDIUM."""
-    name = str(event_name).lower()
+    """Resolve an event name or FastF1 event object to a track type and its characteristics. Falls back to MEDIUM."""
+    if hasattr(event_name, 'get') or isinstance(event_name, dict):
+        e_name = str(event_name.get('EventName', ''))
+        loc = str(event_name.get('Location', ''))
+        country = str(event_name.get('Country', ''))
+        name = f"{e_name} {loc} {country}".lower()
+    else:
+        name = str(event_name).lower()
     
     # Map common Grand Prix adjectives/names to keys in TRACK_CHARACTERISTICS
     name_mappings = {
@@ -232,7 +242,7 @@ def extract_season_trends(year, current_race):
     try:
         current_event = fastf1.get_event(year, current_race)
         current_round = current_event['RoundNumber']
-        current_track_info = _get_track_type(current_event['EventName'])
+        current_track_info = _get_track_type(current_event)
         current_track_type = current_track_info['df_type']
     except Exception:
         return {}, {}
@@ -270,7 +280,7 @@ def extract_season_trends(year, current_race):
         try:
             # Resolve the track type of this historical race
             hist_event = fastf1.get_event(fetch_year, fetch_round)
-            hist_track_info = _get_track_type(hist_event['EventName'])
+            hist_track_info = _get_track_type(hist_event)
             hist_track_type = hist_track_info['df_type']
             weight = _track_similarity_weight(current_track_type, hist_track_type)
             

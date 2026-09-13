@@ -279,7 +279,7 @@ def main(year=2025, race='Monza', num_iterations=50_000, penalties_str="", min_l
         # Get track specifics (df_type, turn_1_chaos, tow_factor, overtaking_diff, SC/VSC rates)
         try:
             event_info = fastf1.get_event(year, race)
-            track_info = _get_track_type(event_info['EventName'])
+            track_info = _get_track_type(event_info)
         except Exception:
             track_info = None
 
