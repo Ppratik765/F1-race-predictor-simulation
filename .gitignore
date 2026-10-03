@@ -3,5 +3,6 @@ fastf1_cache/
 _cache/
 *.json
 visualizations/*.png
+!visualizations/*_win_probabilities.png
 *.pyc
 watermark.png
