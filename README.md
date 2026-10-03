@@ -77,29 +77,6 @@ A highly accurate, data-driven Monte Carlo simulation engine for Formula 1 race 
 
 ![Bahrain Grand Prix 2026 Win Probabilities](visualizations/f1_sim_2026_bahrain_win_probabilities.png)
 
-<br>
-
-<details>
-<summary><b>📊 Additional Race Forecast Visualizations (Tiered Finishes, Expected Points, Net Position Change, DNF Risk)</b></summary>
-
-<br>
-
-![Bahrain Grand Prix 2026 Tiered Finishes](visualizations/f1_sim_2026_bahrain_tiered_finishes.png)
-
-<br>
-
-![Bahrain Grand Prix 2026 Expected Points](visualizations/f1_sim_2026_bahrain_expected_points.png)
-
-<br>
-
-![Bahrain Grand Prix 2026 Net Position Change](visualizations/f1_sim_2026_bahrain_net_position_change.png)
-
-<br>
-
-![Bahrain Grand Prix 2026 DNF Risk Profile](visualizations/f1_sim_2026_bahrain_dnf_risk.png)
-
-</details>
-
 </details>
 
 ---
